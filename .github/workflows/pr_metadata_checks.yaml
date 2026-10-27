@@ -1,0 +1,59 @@
+name: Metadata_Validator
+
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+
+jobs:
+  check-pr-title:
+    name: PR_Title_Linter
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate PR title syntax
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const validKeywords = ['fix', 'feat', 'chore', 'docs', 'perf', 'test', 'ci', 'refactor'];
+            const title = context.payload.pull_request?.title || '';
+
+            const match = title.match(/^(\w+):\s.+/);
+            if (!match) {
+              core.setFailed(
+                `Invalid PR title format: "${title}"\n\n` +
+                `PR title must follow this format -> prefix: descriptive message\n\n` +
+                `Example -> feat: Add Ansible role for ODF storage configuration\n\n` +
+                `Allowed prefixes:\n` +
+                `  - feat     : new feature or capability\n` +
+                `  - fix      : bug fix\n` +
+                `  - chore    : maintenance, dependency bumps\n` +
+                `  - docs     : documentation only\n` +
+                `  - perf     : performance improvement\n` +
+                `  - test     : adding or fixing tests\n` +
+                `  - ci       : CI/CD pipeline changes\n` +
+                `  - refactor : code restructuring without behaviour change\n\n` +
+                `This format drives automated changelogs and version management.`
+              );
+              return;
+            }
+
+            const keyword = match[1];
+            if (!validKeywords.includes(keyword)) {
+              core.setFailed(
+                `Invalid prefix "${keyword}"\n\n` +
+                `Allowed prefixes: ${validKeywords.join(', ')}`
+              );
+            }
+
+  check-pr-description:
+    name: PR_Description_Validator
+    runs-on: ubuntu-latest
+    steps:
+      - name: Validate PR description presence
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const body = context.payload.pull_request?.body || '';
+
+            if (!body.trim()) {
+              core.setFailed('PR description (body) must not be empty.');
+            }

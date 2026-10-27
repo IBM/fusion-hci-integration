@@ -1,0 +1,13 @@
+# Developer toolchain — install on your workstation to work on this repo.
+# These are NOT product dependencies; nothing here is required at runtime.
+#
+# Install with:  pip install -r requirements-dev.txt
+
+# Documentation site
+mkdocs
+
+# Templating — used by generate-setup
+jinja2
+
+# Ansible linting
+ansible-lint
