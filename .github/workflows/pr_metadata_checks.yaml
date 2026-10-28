@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Validate PR title syntax
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const validKeywords = ['fix', 'feat', 'chore', 'docs', 'perf', 'test', 'ci', 'refactor'];
@@ -49,7 +49,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Validate PR description presence
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         with:
           script: |
             const author = context.payload.pull_request?.user?.login || '';
