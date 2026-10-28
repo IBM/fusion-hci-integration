@@ -4,6 +4,6 @@
   "extends": ["config:recommended"],
   "enabledManagers": ["pip_requirements"],
   "includePaths": ["requirements-dev.txt"],
-  "schedule": ["once a week"]
+  "schedule": ["before 5am on monday"]
 }
 
