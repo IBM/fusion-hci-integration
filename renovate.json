@@ -1,6 +1,9 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
-  "extends": [
-    "config:recommended"
-  ]
+  "description": "Renovate configuration for fusion-hci-integration. Only updates MkDocs documentation dependencies. Operator base images (ose-ansible-operator) are intentionally excluded — they must stay in sync with the OCP cluster version.",
+  "extends": ["config:recommended"],
+  "enabledManagers": ["pip_requirements"],
+  "includePaths": ["requirements-dev.txt"],
+  "schedule": ["once a week"]
 }
+
