@@ -1,0 +1,12 @@
+---
+# Ansible collections required by the hci-consumer operator roles.
+# Install with: ansible-galaxy collection install -r requirements.yml
+
+collections:
+  # Core Kubernetes/OpenShift interaction — k8s, k8s_info modules
+  - name: kubernetes.core
+    version: ">=2.4.0"
+
+  # operator_sdk.util — k8s_status module for writing CR status conditions
+  - name: operator_sdk.util
+    version: ">=0.4.0"

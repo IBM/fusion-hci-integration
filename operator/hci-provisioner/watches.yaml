@@ -1,0 +1,41 @@
+---
+# watches.yaml — maps Kubernetes CR kinds to Ansible roles
+#
+# When a WorkerPoolProvisioning CR is created, modified, or the status of an owned
+# Job changes, the operator runner invokes the hci_provisioner role.
+#
+# The finalizer ensures the cleanup role is called on deletion, allowing the
+# operator to cancel in-flight Jobs before the CR is removed.
+#
+# reconcilePeriod: required for async steps (GatewayVM SSH wait, MachineConfig
+#   readiness). Without it the loop only fires on CR spec/status changes, so
+#   InProgress steps that are waiting for external state never re-check.
+#   60 s is a reasonable polling cadence; reduce to 30 s if faster feedback
+#   is needed during initial bootstrap.
+#
+# manageStatus: false — the role owns all status writes via operator_sdk.util.k8s_status.
+#   The default (true) causes the framework to merge its own empty status object
+#   after every role run, clobbering the step entries written in advance_steps.yml.
+#
+# snakeCaseParameters: false — the runner does camelCase→snake_case translation
+#   automatically; leaving this true (default) would double-translate nested keys.
+#
+# watchDependentResources: false — we do not own any Jobs that should trigger
+#   re-reconciliation; owned Job completion is detected by the reconcilePeriod
+#   re-entry, not by watch events on the Job objects.
+#
+# gatheredFacts: true — the role uses ansible_date_time.epoch / .iso8601 for
+#   lastTransitionTime and GatewayVM timeout calculations. The ose-ansible-operator
+#   runner sets gather_facts=false by default; override it here.
+
+- version: v1alpha1
+  group: hci-integration.openshift.io
+  kind: WorkerPoolProvisioning
+  role: hci_provisioner
+  reconcilePeriod: 60s
+  manageStatus: false
+  watchDependentResources: false
+  gatheredFacts: true
+  finalizer:
+    name: hci-integration.openshift.io/provisioner-cleanup
+    role: hci_provisioner_cleanup

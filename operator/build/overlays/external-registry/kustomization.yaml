@@ -1,0 +1,21 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# External registry overlay — build output goes to a DockerImage push target.
+# output-patch-consumer.yaml and output-patch-provisioner.yaml are generated
+# by `make apply-buildconfigs BUILD_OVERLAY=build/overlays/external-registry`
+# from build/config.env (REGISTRY_PUSH, REGISTRY_PUSH_SECRET, IMAGE_TAG).
+# These files are in .gitignore — they are environment-specific.
+
+resources:
+  - ../../base
+
+patches:
+  - path: output-patch-consumer.yaml
+    target:
+      kind: BuildConfig
+      name: hci-consumer-operator
+  - path: output-patch-provisioner.yaml
+    target:
+      kind: BuildConfig
+      name: hci-provisioner-operator

@@ -1,0 +1,20 @@
+---
+# Default variable values for the hci_provisioner_cleanup role.
+
+consumer_ref: ""
+mode: "bootstrap"
+
+provider:
+  credentials_secret: "hci-provisioner-credentials"
+  namespace: ""
+  api_endpoint: ""
+
+networking:
+  topology: "direct"
+  mac_prefix: "52:54:00"
+  internal_subnet: "192.168.100.0/24"
+
+gateway:
+  ip: ""
+  prefix_length: 24
+  default_router: ""

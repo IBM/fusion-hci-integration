@@ -1,0 +1,159 @@
+---
+# RBAC Role for the hci-provisioner operator ServiceAccount.
+#
+# Principle of least privilege — the provisioner holds only what it needs:
+#   - Read/write HCIProvisioning status (its own CRD)
+#   - Patch HCIConsumer status (to report phase transitions back to consumer)
+#   - Full CRUD on Kubernetes Jobs (the step execution model)
+#   - Read Secrets in the operator namespace (provisioner credentials, SSH keys)
+#   - Read/write ConfigMaps in the operator namespace (temp kubeconfig staging)
+#   - Read MachineConfig on LO (BS-04: read 99-worker-ssh SSH key for gateway cloud-init)
+#
+# The provisioner does NOT hold:
+#   - cluster-admin
+#   - VirtualMachine/DataVolume access on HCI (accessed via provisioner kubeconfig in Secret)
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: hci-provisioner-operator
+rules:
+
+  # ── WorkerPoolProvisioning — full control over the operator's own CRD ────────
+  - apiGroups:
+      - hci-integration.openshift.io
+    resources:
+      - workerpoolprovisionings
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  - apiGroups:
+      - hci-integration.openshift.io
+    resources:
+      - workerpoolprovisionings/status
+    verbs:
+      - get
+      - patch
+      - update
+  - apiGroups:
+      - hci-integration.openshift.io
+    resources:
+      - workerpoolprovisionings/finalizers
+    verbs:
+      - update
+
+  # ── WorkerPool — status patch only (report phase transitions) ────────────────
+  - apiGroups:
+      - hci-integration.openshift.io
+    resources:
+      - workerpools
+    verbs:
+      - get
+      - list
+      - watch
+  - apiGroups:
+      - hci-integration.openshift.io
+    resources:
+      - workerpools/status
+    verbs:
+      - get
+      - patch
+      - update
+
+  # ── Jobs — full CRUD (create step Jobs, watch termination, delete on cleanup) ─
+  - apiGroups:
+      - batch
+    resources:
+      - jobs
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+  - apiGroups:
+      - batch
+    resources:
+      - jobs/status
+    verbs:
+      - get
+      - watch
+
+  # ── Secrets — read + create/update (provisioner credentials; operator-generated
+  #              SSH keypair Secret written on first bootstrap reconcile) ─────────
+  - apiGroups:
+      - ""
+    resources:
+      - secrets
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+
+  # ── ConfigMaps — read/write (temp kubeconfig staging, step config) ────────────
+  - apiGroups:
+      - ""
+    resources:
+      - configmaps
+    verbs:
+      - get
+      - list
+      - watch
+      - create
+      - update
+      - patch
+      - delete
+
+  # ── Nodes — read (pre-condition checks: MachineConfigPool readiness) ──────────
+  - apiGroups:
+      - ""
+    resources:
+      - nodes
+    verbs:
+      - get
+      - list
+      - watch
+
+  # ── config.openshift.io — read (cluster-scoped resources used by BS-04/BS-06a) ─
+  #   clusterversions  : BS-04 — bake desired OCP stream into gateway cloud-init
+  #   dnses            : BS-04 — derive cluster baseDomain for cloud-init hostname
+  #   infrastructures  : BS-06a — get apiServerInternalURI for worker-hci.ign
+  - apiGroups:
+      - config.openshift.io
+    resources:
+      - clusterversions
+      - dnses
+      - infrastructures
+    verbs:
+      - get
+      - list
+      - watch
+
+  # ── MachineConfig — read only (BS-04: read 99-worker-ssh SSH key for gateway) ─
+  - apiGroups:
+      - machineconfiguration.openshift.io
+    resources:
+      - machineconfigs
+    verbs:
+      - get
+      - list
+      - watch
+
+  # ── Events — write (surface step progress and errors in the namespace) ────────
+  - apiGroups:
+      - ""
+    resources:
+      - events
+    verbs:
+      - create
+      - patch

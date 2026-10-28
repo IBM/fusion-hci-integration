@@ -1,0 +1,139 @@
+---
+# ensure_provisioner_ssh_key.yml — BS-06a pre-requisite
+#
+# Generates an ed25519 SSH keypair for exclusive use by the hci-provisioner
+# operator. The private key is stored in an operator-owned Secret created with
+# generateName so the name is unique and clearly not user-managed. The actual
+# Secret name is persisted in HCIProvisioning.status.sshKeySecret so it
+# survives operator restarts without any in-memory state.
+#
+# Idempotency:
+#   - If status.sshKeySecret is already set AND the Secret exists → no-op.
+#   - If the Secret named in status.sshKeySecret has been deleted (or the
+#     field is absent) → regenerate keypair + create new Secret + update status.
+#
+# Produced facts (available to callers in the same play):
+#   _provisioner_ssh_public_key   — OpenSSH public key string (for cloud-init)
+#   _provisioner_ssh_secret_name  — actual Secret name (for BS-06a Job mount)
+#
+# Called from main.yml before the step initialisation block so that BS-04
+# (cloud-init rendering) can inject the public key alongside the admin key.
+
+# ── Check whether a valid Secret already exists ───────────────────────────────
+
+- name: "SSH key | Read sshKeySecret name from WorkerPoolProvisioning status"
+  ansible.builtin.set_fact:
+    _ssh_secret_name_known: >-
+      {{ (current_cr.resources | first).status.sshKeySecret | default('') }}
+
+- name: "SSH key | Look up existing Secret by stored name"
+  when: _ssh_secret_name_known | length > 0
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: "{{ _ssh_secret_name_known }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+  register: _ssh_secret_lookup
+
+- name: "SSH key | Decide whether generation is needed"
+  ansible.builtin.set_fact:
+    _ssh_key_needs_generation: >-
+      {{
+        _ssh_secret_name_known | length == 0
+        or (_ssh_secret_lookup is not skipped
+            and _ssh_secret_lookup.resources | length == 0)
+      }}
+
+- name: "SSH key | Log decision (exists)"
+  when: not _ssh_key_needs_generation
+  ansible.builtin.debug:
+    msg: "SSH keypair: Secret '{{ _ssh_secret_name_known }}' exists — skipping generation."
+
+- name: "SSH key | Log decision (generate)"
+  when: _ssh_key_needs_generation
+  ansible.builtin.debug:
+    msg: "SSH keypair: No valid Secret found — generating new ed25519 keypair."
+
+# ── Generate keypair and create Secret ───────────────────────────────────────
+
+- name: "SSH key | Generate new keypair"
+  when: _ssh_key_needs_generation
+  block:
+
+    - name: "SSH key | Create temp directory for keypair"
+      ansible.builtin.tempfile:
+        state: directory
+        suffix: ".sshkey"
+      register: _ssh_tmpdir
+
+    - name: "SSH key | Generate ed25519 keypair"
+      ansible.builtin.command:
+        cmd: >-
+          ssh-keygen -t ed25519 -N ''
+          -C 'hci-provisioner-operator'
+          -f {{ _ssh_tmpdir.path }}/id_ed25519
+        creates: "{{ _ssh_tmpdir.path }}/id_ed25519"
+
+    - name: "SSH key | Read private key"
+      ansible.builtin.slurp:
+        src: "{{ _ssh_tmpdir.path }}/id_ed25519"
+      register: _ssh_private_key_raw
+
+    - name: "SSH key | Read public key"
+      ansible.builtin.slurp:
+        src: "{{ _ssh_tmpdir.path }}/id_ed25519.pub"
+      register: _ssh_public_key_raw
+
+    - name: "SSH key | Remove temp directory"
+      ansible.builtin.file:
+        path: "{{ _ssh_tmpdir.path }}"
+        state: absent
+
+    - name: "SSH key | Create Secret with generateName"
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Secret
+          metadata:
+            generateName: "{{ provisioner_ssh_key_secret_prefix }}"
+            namespace: "{{ ansible_operator_meta.namespace }}"
+            labels:
+              hci-integration.openshift.io/managed-by: hci-provisioner-operator
+              hci-integration.openshift.io/consumer: "{{ worker_pool_ref }}"
+          type: Opaque
+          data:
+            id_ed25519: "{{ _ssh_private_key_raw.content }}"
+            id_ed25519.pub: "{{ _ssh_public_key_raw.content }}"
+      register: _ssh_secret_created
+
+    - name: "SSH key | Persist Secret name in WorkerPoolProvisioning status"
+      operator_sdk.util.k8s_status:
+        api_version: hci-integration.openshift.io/v1alpha1
+        kind: WorkerPoolProvisioning
+        name: "{{ ansible_operator_meta.name }}"
+        namespace: "{{ ansible_operator_meta.namespace }}"
+        status:
+          sshKeySecret: "{{ _ssh_secret_created.result.metadata.name }}"
+
+    - name: "SSH key | Set _ssh_secret_name_known to newly created name"
+      ansible.builtin.set_fact:
+        _ssh_secret_name_known: "{{ _ssh_secret_created.result.metadata.name }}"
+
+# ── Expose facts to callers ───────────────────────────────────────────────────
+# Re-read the Secret (whether freshly created or pre-existing) so the public
+# key and Secret name are always available as facts after this task file runs.
+
+- name: "SSH key | Read Secret to expose facts"
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: "{{ _ssh_secret_name_known }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+  register: _ssh_secret_final
+
+- name: "SSH key | Set provisioner SSH key facts"
+  ansible.builtin.set_fact:
+    _provisioner_ssh_secret_name: "{{ _ssh_secret_name_known }}"
+    _provisioner_ssh_public_key: >-
+      {{ (_ssh_secret_final.resources | first).data['id_ed25519.pub'] | b64decode | trim }}

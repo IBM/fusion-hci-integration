@@ -1,0 +1,230 @@
+---
+# hci_consumer_cleanup role — called on CR deletion (via finalizer).
+#
+# Invoked by the operator runner when a WorkerPool CR is being deleted and
+# the finalizer hci-integration.openshift.io/cleanup is present.
+# Must complete successfully before the finalizer is removed and the CR deleted.
+#
+# Sequence:
+#   1. Patch the WorkerPoolProvisioning CR spec.mode → teardown and reset
+#      status.phase + status.steps. Idempotent — safe on every reconcile.
+#   2. Gate: if WorkerPoolProvisioning phase is not yet Complete, end play and
+#      retry on next reconcile.
+#   3. Once teardown Complete: force-delete ALL worker VMs and node objects
+#      unconditionally. No cordon+drain check — by the time the provisioner
+#      teardown is Complete the gateway VM is already gone, worker nodes have
+#      lost their network path and gone NotReady, and LOOps can no longer
+#      reach them. The WPP Complete gate is itself the safety condition.
+#   4. All VMs gone → release finalizer → WorkerPool CR deleted →
+#      Kubernetes GC cascade-deletes the WorkerPoolProvisioning CR (ownerRef).
+
+- name: "Log HCIConsumer deletion start"
+  ansible.builtin.debug:
+    msg: >-
+      Cleanup triggered for HCIConsumer '{{ ansible_operator_meta.name }}'.
+      Patching HCIProvisioning CR to teardown mode, then drain-check worker VMs.
+
+# ── Patch HCIProvisioning CR → teardown (idempotent) ─────────────────────────
+# Fetch the single stable CR, patch spec.mode to teardown and reset status
+# only if it is not already in teardown mode or Complete.
+
+- name: "Cleanup | Fetch WorkerPoolProvisioning CR"
+  kubernetes.core.k8s_info:
+    api_version: hci-integration.openshift.io/v1alpha1
+    kind: WorkerPoolProvisioning
+    name: "{{ ansible_operator_meta.name }}-provisioning"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+  register: _cleanup_provisioning_cr
+
+- name: "Cleanup | Abort if WorkerPoolProvisioning CR not found"
+  when: _cleanup_provisioning_cr.resources | length == 0
+  ansible.builtin.fail:
+    msg: >-
+      WorkerPoolProvisioning CR '{{ ansible_operator_meta.name }}-provisioning' not found.
+      Cannot trigger teardown.
+
+- name: "Cleanup | Set current provisioning mode + phase"
+  ansible.builtin.set_fact:
+    _cleanup_prov_mode: >-
+      {{ (_cleanup_provisioning_cr.resources | first).spec.mode }}
+    _cleanup_prov_phase: >-
+      {{ (_cleanup_provisioning_cr.resources | first).status.phase | default('Pending') }}
+
+- name: "Cleanup | Patch spec.mode → teardown"
+  when: _cleanup_prov_mode != 'teardown'
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: hci-integration.openshift.io/v1alpha1
+      kind: WorkerPoolProvisioning
+      metadata:
+        name: "{{ ansible_operator_meta.name }}-provisioning"
+        namespace: "{{ ansible_operator_meta.namespace }}"
+      spec:
+        mode: teardown
+
+- name: "Cleanup | Reset status to Pending teardown (only when switching to teardown)"
+  when: _cleanup_prov_mode != 'teardown'
+  operator_sdk.util.k8s_status:
+    api_version: hci-integration.openshift.io/v1alpha1
+    kind: WorkerPoolProvisioning
+    name: "{{ ansible_operator_meta.name }}-provisioning"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+    status:
+      phase: "Pending"
+      steps: []
+
+# ── Gate: wait for teardown HCIProvisioning to Complete ───────────────────────
+# Re-read after possible patch to get authoritative current phase.
+
+- name: "Cleanup | Re-fetch WorkerPoolProvisioning CR for phase check"
+  kubernetes.core.k8s_info:
+    api_version: hci-integration.openshift.io/v1alpha1
+    kind: WorkerPoolProvisioning
+    name: "{{ ansible_operator_meta.name }}-provisioning"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+  register: _teardown_cr
+
+- name: "Cleanup | Set teardown_phase fact"
+  ansible.builtin.set_fact:
+    _teardown_phase: >-
+      {{ (_teardown_cr.resources | first).status.phase | default('Pending') }}
+
+- name: "Cleanup | Log teardown gate"
+  ansible.builtin.debug:
+    msg: >-
+      Teardown HCIProvisioning phase={{ _teardown_phase }}.
+      Worker VM cleanup {{ 'PERMITTED' if _teardown_phase == 'Complete' else 'WAITING — will fail to force requeue' }}.
+
+# IMPORTANT: ose-ansible-operator releases the finalizer and removes the CR as
+# soon as the cleanup role exits cleanly (even via meta: end_play).  It does NOT
+# re-enter the cleanup role on the next reconcile period the way the main role is
+# re-entered.  The only way to hold the finalizer and force a retry is to make
+# the role FAIL — a failed run causes the framework to requeue the reconcile and
+# re-enter the cleanup role after the reconcilePeriod.
+- name: "Cleanup | Fail to hold finalizer — teardown not yet Complete"
+  when: _teardown_phase != 'Complete'
+  ansible.builtin.fail:
+    msg: >-
+      WorkerPoolProvisioning teardown still in progress (phase={{ _teardown_phase }}).
+      Holding finalizer — will retry after reconcilePeriod.
+
+# ── Gate: credentials Secret must exist ──────────────────────────────────────
+
+- name: "Cleanup | Verify provider credentials Secret exists"
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: "{{ provider.credentials_secret }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+  register: cleanup_creds_check
+
+- name: "Cleanup | Abort if credentials Secret missing"
+  when: cleanup_creds_check.resources | length == 0
+  ansible.builtin.fail:
+    msg: >-
+      Provider credentials Secret '{{ provider.credentials_secret }}' not found.
+      Cannot enumerate VMs on provider cluster — cleanup cannot proceed safely.
+
+# ── OBSERVE ───────────────────────────────────────────────────────────────────
+# Reuse the standard observation phase. Produces existing_vm_names,
+# existing_node_names (prefix + MCP role label), hci_kubeconfig_file.
+
+- name: "Cleanup | Observe world state"
+  ansible.builtin.include_tasks: ../hci_consumer/tasks/observe_world.yml
+
+# ── DIFF (cleanup-specific) ───────────────────────────────────────────────────
+# Target: zero VMs on HCI and zero node objects on LO.
+#
+# VMs: provisioner Workers step deleted all consumer VMs before WPP reached
+# Complete. existing_vm_names is typically empty — remove_worker_vm.yml is
+# idempotent so any stragglers are still cleaned up safely.
+#
+# Nodes: existing_node_names (prefix + MCP role label) is the ownership
+# fingerprint. These must be deleted directly — the provisioner has no LO
+# cluster access. Nodes are NotReady (gateway gone); deletion is safe.
+
+- name: "Cleanup | vms_to_delete = all existing VMs (idempotent)"
+  ansible.builtin.set_fact:
+    vms_to_delete: "{{ existing_vm_names | sort | reverse | list }}"
+
+- name: "Cleanup | Log plan"
+  ansible.builtin.debug:
+    msg: >-
+      Cleanup plan for WorkerPool '{{ ansible_operator_meta.name }}':
+        VMs to delete  : {{ vms_to_delete | join(', ') or '(none)' }}
+        Nodes to delete: {{ existing_node_names | sort | join(', ') or '(none)' }}
+
+# ── ACT: VMs ──────────────────────────────────────────────────────────────────
+
+- name: "Cleanup | Force-delete all worker VMs (idempotent — may already be gone)"
+  when: vms_to_delete | length > 0
+  ansible.builtin.include_tasks: ../hci_consumer/tasks/remove_worker_vm.yml
+  loop: "{{ vms_to_delete }}"
+  loop_control:
+    loop_var: vm_name_to_remove
+
+# ── ACT: node objects ─────────────────────────────────────────────────────────
+# Delete all LO node objects matching ownership fingerprint (prefix + MCP label).
+# Covers the case where provisioner already deleted VMs (existing_vm_names empty)
+# but node objects remain on LO — the remove_worker_vm.yml loop above would not
+# reach them.
+
+- name: "Cleanup | Force-delete all matching node objects"
+  when: existing_node_names | length > 0
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: Node
+    name: >-
+      {{
+        (_obs_all_nodes.resources
+         | map(attribute='metadata.name')
+         | select('match', '^' + item + '([.]|$)')
+         | list)[0]
+        if (_obs_all_nodes.resources
+            | map(attribute='metadata.name')
+            | select('match', '^' + item + '([.]|$)')
+            | list | length) > 0
+        else item
+      }}
+    state: absent
+  loop: "{{ existing_node_names | sort }}"
+  loop_control:
+    label: "{{ item }}"
+
+# ── Status: zero out worker counts + set Deprovisioned ───────────────────────
+# The WorkerPool CR still exists at this point (finalizer not yet released).
+# Write zeroed counts so the table reflects reality before GC removes the CR.
+
+- name: "Cleanup | Re-observe remaining VMs and nodes after delete loops"
+  ansible.builtin.include_tasks: ../hci_consumer/tasks/observe_world.yml
+
+- name: "Cleanup | Write observed worker counts to WorkerPool status"
+  operator_sdk.util.k8s_status:
+    api_version: hci-integration.openshift.io/v1alpha1
+    kind: WorkerPool
+    name: "{{ ansible_operator_meta.name }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+    status: >-
+      {{
+        {
+          'phase':           'Deprovisioned',
+          'deployedWorkers': existing_vm_names | length | int,
+          'readyWorkers':    existing_node_names | length | int,
+          'pendingWorkers':  0
+        }
+      }}
+
+# ── Cleanup ───────────────────────────────────────────────────────────────────
+
+- name: "Cleanup | Remove temp kubeconfig"
+  ansible.builtin.file:
+    path: "{{ hci_kubeconfig_file.path }}"
+    state: absent
+  when: hci_kubeconfig_file is defined and hci_kubeconfig_file.path is defined
+
+- name: "Cleanup | Done"
+  ansible.builtin.debug:
+    msg: >-
+      HCIConsumer '{{ ansible_operator_meta.name }}' cleanup complete.
+      All operator-owned VMs deleted on HCI.

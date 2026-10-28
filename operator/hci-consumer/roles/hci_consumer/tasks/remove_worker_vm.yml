@@ -1,0 +1,106 @@
+---
+# LO-06: Remove a single worker VM that is no longer in the desired set.
+#
+# Called in a loop from scale_down.yml with loop_var: vm_name_to_remove.
+# The HCI kubeconfig temp file is available as hci_kubeconfig_file.path
+# (written by observe_world.yml).
+#
+# Pre-condition (enforced by diff_desired_actual.yml):
+#   This task is only called for VMs in vms_safe_to_delete — meaning the node
+#   either does not exist or exists with zero non-daemonset pods. No drain is
+#   needed or performed here. LOOps is responsible for draining before the CR
+#   count is reduced; the diff step simply refuses to include nodes that still
+#   carry workload pods.
+#
+# Sequence:
+#   1. Delete the node object from the main cluster (if it still exists)
+#   2. Delete the VirtualMachine from HCI
+#   3. Delete the DataVolume from HCI
+
+- name: "LO-06 | Log removal start for {{ vm_name_to_remove }}"
+  ansible.builtin.debug:
+    msg: "Removing worker: {{ vm_name_to_remove }}"
+
+# ── Step 1: delete node object (idempotent — skip if already gone) ────────────
+#
+# Node objects on the LO cluster use FQDN names (e.g. worker-x86-2.domain).
+# We look up the real name with a fresh k8s_info filtered by name prefix,
+# then delete whichever object matches. This avoids depending on _obs_all_nodes
+# being in scope across include_tasks boundaries.
+
+# Fetch only the nodes whose name starts with vm_name_to_remove to avoid
+# iterating the full cluster node list.  field_selectors do not support
+# prefix matching, so we filter client-side on the (small) result set from
+# a label-based pre-filter using the MCP role label.
+- name: "LO-06 | Look up node FQDN for {{ vm_name_to_remove }}"
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Node
+    label_selectors:
+      - "node-role.kubernetes.io/{{ consumer.machine_config_pool }}"
+  register: _removal_all_nodes
+
+- name: "LO-06 | Resolve FQDN for node {{ vm_name_to_remove }}"
+  ansible.builtin.set_fact:
+    _node_fqdn_list: >-
+      {{
+        _removal_all_nodes.resources
+        | map(attribute='metadata.name')
+        | select('match', '^' + vm_name_to_remove + '([.]|$)')
+        | list
+      }}
+
+# Use the FQDN when found; fall back to the bare VM name (already-deleted node
+# or no domain suffix).  Avoid | first on empty list — not safe in Ansible 2.9.
+- name: "LO-06 | Set _node_fqdn fact"
+  ansible.builtin.set_fact:
+    _node_fqdn: >-
+      {{ _node_fqdn_list[0] if (_node_fqdn_list | length) > 0 else vm_name_to_remove }}
+
+- name: "LO-06 | Delete node object {{ _node_fqdn }}"
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: Node
+    name: "{{ _node_fqdn }}"
+    state: absent
+
+# ── Step 2: delete VirtualMachine on HCI ─────────────────────────────────────
+#
+# Fire-and-forget (wait: false): the reconcile loop re-observes on the next
+# trigger. If the VM is still terminating it simply re-queues the delete
+# (idempotent no-op). Once the VM object is gone the pool converges to
+# steady state without ever blocking this reconcile.
+#
+# KubeVirt's own finalizer on the VirtualMachine object ensures the VMI is
+# powered off before the VM is removed, so the DataVolume delete below is
+# safe to issue immediately — CDI will not remove the DV while the VM
+# finalizer is still present.
+
+- name: "LO-06 | Delete VirtualMachine {{ vm_name_to_remove }} on provider cluster"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ hci_kubeconfig_file.path }}"
+    api_version: kubevirt.io/v1
+    kind: VirtualMachine
+    name: "{{ vm_name_to_remove }}"
+    namespace: "{{ provider.namespace }}"
+    state: absent
+    wait: false
+
+# ── Step 3: delete DataVolume on HCI ─────────────────────────────────────────
+#
+# DataVolume name convention (matches create_worker_vm.yml): <vm-name>-rootdisk
+# Also fire-and-forget — CDI handles cleanup once the VM finalizer releases.
+
+- name: "LO-06 | Delete DataVolume {{ vm_name_to_remove }}-rootdisk on provider cluster"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ hci_kubeconfig_file.path }}"
+    api_version: cdi.kubevirt.io/v1beta1
+    kind: DataVolume
+    name: "{{ vm_name_to_remove }}-rootdisk"
+    namespace: "{{ provider.namespace }}"
+    state: absent
+    wait: false
+
+- name: "LO-06 | {{ vm_name_to_remove }} removal triggered"
+  ansible.builtin.debug:
+    msg: "Worker {{ vm_name_to_remove }}: node deleted, VM and DataVolume deletion triggered (async)."

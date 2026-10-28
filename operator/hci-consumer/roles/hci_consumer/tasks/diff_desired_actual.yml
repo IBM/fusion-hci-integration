@@ -1,0 +1,162 @@
+---
+# diff_desired_actual.yml — compute the delta between desired and actual state.
+#
+# This is the "diff" phase of the observe → diff → act loop.
+# Input  : facts produced by observe_world.yml
+# Output : action lists consumed by scale_up.yml and scale_down.yml
+# Rule   : NO API calls here — pure list algebra on existing facts.
+#
+# Deletion model (why not index arithmetic):
+#   The operator does not decide *which* VM to remove based on index position.
+#   LOOps decides which node to drain; the operator acts on the result.
+#   A VM is a deletion candidate only when its node is absent or empty.
+#   Among candidates, we prefer highest index first (keeps the set contiguous,
+#   avoids unnecessary gap-fill churn on the next scale-up).
+#   We delete at most `surplus` VMs per reconcile, where:
+#     surplus = existing_vm_count − workers.count  (0 if no scale-down needed)
+#
+# Creation model:
+#   Find all indices 1..workers.count not already covered by an existing VM name.
+#   Sort ascending and take the first `deficit` names, where:
+#     deficit = workers.count − existing_vm_count  (0 if no scale-up needed)
+#   This fills gaps from the lowest index upward.
+#
+# Produced facts:
+#
+#   surplus             — how many VMs exceed the desired count (≥ 0)
+#   deficit             — how many VMs are below the desired count (≥ 0)
+#
+#   vms_safe_to_delete  — VMs whose node is absent or cordoned+drained (safe candidates)
+#   vms_to_delete       — vms_safe_to_delete capped at surplus, highest index first
+#   vms_blocked         — safe candidates beyond the surplus cap (not acted on now)
+#                         PLUS VMs whose nodes are not yet cordoned+drained (truly blocked)
+#
+#   vms_to_create       — lowest-index names missing from existing set, capped at deficit
+
+# ── Guard: clamp workers.count to provider.max_pool_size ─────────────────────
+#
+# If the user sets count > maxPoolSize (possible while the CRD CEL rule is not
+# yet enforced, or when maxPoolSize is lowered without adjusting count), we must
+# not create VMs beyond the committed quota.  We report the violation via a CR
+# condition and proceed with the clamped value so the reconcile loop still
+# converges rather than erroring out.
+
+- name: "Diff | Detect count > maxPoolSize"
+  when: consumer.workers.count | int > provider.max_pool_size | int
+  operator_sdk.util.k8s_status:
+    api_version: hci-integration.openshift.io/v1alpha1
+    kind: WorkerPool
+    name: "{{ ansible_operator_meta.name }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+    status:
+      conditions:
+        - type: "CountExceedsMaxPoolSize"
+          status: "True"
+          reason: "CountClamped"
+          message: >-
+            consumer.workers.count ({{ consumer.workers.count }}) exceeds provider.maxPoolSize
+            ({{ provider.max_pool_size }}). Effective desired count is clamped to
+            {{ provider.max_pool_size }}. Reduce consumer.workers.count to clear this condition.
+
+- name: "Diff | Clear CountExceedsMaxPoolSize when count is within bounds"
+  when: consumer.workers.count | int <= provider.max_pool_size | int
+  operator_sdk.util.k8s_status:
+    api_version: hci-integration.openshift.io/v1alpha1
+    kind: WorkerPool
+    name: "{{ ansible_operator_meta.name }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+    status:
+      conditions:
+        - type: "CountExceedsMaxPoolSize"
+          status: "False"
+          reason: "CountWithinBounds"
+          message: "consumer.workers.count is within provider.maxPoolSize."
+
+- name: "Diff | Compute effective desired count (clamped to maxPoolSize)"
+  ansible.builtin.set_fact:
+    _effective_count: "{{ [consumer.workers.count | int, provider.max_pool_size | int] | min }}"
+
+# ── Surplus / deficit ─────────────────────────────────────────────────────────
+#
+# Surplus and deficit are count-based: how many VMs need to be removed or added
+# to reach the desired count.  Wrong-index VMs (e.g. worker-x86-3 when the
+# desired set is worker-x86-1 and worker-x86-2) are not treated as surplus —
+# the operator does not rename running VMs.  They appear as safe deletion
+# candidates only when count is reduced (making them genuinely surplus by count).
+
+- name: "Diff | Compute surplus and deficit"
+  ansible.builtin.set_fact:
+    surplus: "{{ [existing_vm_names | length - _effective_count | int, 0] | max }}"
+    deficit:  "{{ [_effective_count | int - existing_vm_names | length, 0] | max }}"
+
+# ── Desired name set ──────────────────────────────────────────────────────────
+
+- name: "Diff | Build full desired name list (1.._effective_count)"
+  ansible.builtin.set_fact:
+    _desired_vm_names: >-
+      {{
+        range(1, _effective_count | int + 1)
+        | map('regex_replace', '^(.*)$', consumer.workers.name_prefix + '-\1')
+        | list
+      }}
+
+# ── Deletion candidates — node-state driven, not index driven ─────────────────
+#
+# All VMs whose node is absent (no corresponding node object) or cordoned+drained
+# (node is in nodes_safe_to_delete).  Wrong-index VMs (no node by definition
+# once their node is gone) naturally appear here.  Sorted highest index first.
+
+- name: "Diff | All safe deletion candidates (node absent or cordoned+drained)"
+  ansible.builtin.set_fact:
+    _vms_safe_candidates: >-
+      {{
+        (
+          (existing_vm_names | difference(existing_node_names))
+          + (existing_vm_names | intersect(nodes_safe_to_delete))
+        )
+        | unique
+        | sort
+        | reverse
+        | list
+      }}
+
+# Cap at surplus: only delete as many as needed this reconcile.
+
+- name: "Diff | vms_to_delete = safe candidates capped at surplus"
+  ansible.builtin.set_fact:
+    vms_to_delete: "{{ _vms_safe_candidates[:surplus | int] }}"
+
+# Blocked = everything that can't or won't be deleted this reconcile:
+#   • VMs whose nodes exist but are NOT yet cordoned+drained (truly blocked)
+#   • Safe candidates beyond the surplus cap (not needed this reconcile)
+
+- name: "Diff | vms_blocked = truly blocked + safe-but-not-needed"
+  ansible.builtin.set_fact:
+    vms_blocked: >-
+      {{
+        (existing_vm_names | intersect(existing_node_names) | difference(nodes_safe_to_delete) | sort)
+        + (_vms_safe_candidates[surplus | int:] | sort)
+      }}
+
+# ── Creation candidates — lowest missing indices, capped at deficit ───────────
+#
+# Only create VMs when deficit > 0 (pool is below desired count).
+# Capping at deficit prevents gap-fill when wrong-index VMs occupy the
+# count slots — the operator does not rename VMs.
+
+- name: "Diff | vms_to_create = missing desired names capped at deficit"
+  ansible.builtin.set_fact:
+    vms_to_create: "{{ (_desired_vm_names | difference(existing_vm_names) | sort)[:deficit | int] | list }}"
+
+# ── Summary log ───────────────────────────────────────────────────────────────
+
+- name: "Diff | Action plan summary"
+  ansible.builtin.debug:
+    msg: >-
+      Action plan for WorkerPool '{{ ansible_operator_meta.name }}':
+        Existing VMs      : {{ existing_vm_names | sort | join(', ') or '(none)' }}
+        workers.count     : {{ consumer.workers.count }} (maxPoolSize={{ provider.max_pool_size }}, effective={{ _effective_count }})
+        surplus={{ surplus }}, deficit={{ deficit }}
+        To create         : {{ vms_to_create | join(', ') or '(none)' }}
+        To delete         : {{ vms_to_delete | join(', ') or '(none)' }}
+        Blocked           : {{ vms_blocked | join(', ') or '(none)' }}

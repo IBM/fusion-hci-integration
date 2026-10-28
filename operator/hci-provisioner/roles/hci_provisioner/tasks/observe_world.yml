@@ -1,0 +1,118 @@
+---
+# observe_world.yml — gather all cluster state needed by the provisioner
+#
+# Reads:
+#   - Current HCIProvisioning status.steps (the authoritative step state)
+#   - All batch/v1 Jobs owned by this HCIProvisioning CR (by ownerReference)
+#
+# Produces facts:
+#   step_statuses   dict  { "GatewayVM": "Pending", "UDN": "InProgress", ... }
+#   job_statuses    dict  { "GatewayVM": "Succeeded", "UDN": "Running", ... }
+#                         values: Succeeded | Failed | Running | Missing
+#
+# No other API calls are made in this file. All cluster reads happen here.
+
+# ── Fetch current WorkerPoolProvisioning CR ──────────────────────────────────
+
+- name: "Observe: fetch WorkerPoolProvisioning CR"
+  kubernetes.core.k8s_info:
+    api_version: hci-integration.openshift.io/v1alpha1
+    kind: WorkerPoolProvisioning
+    name: "{{ ansible_operator_meta.name }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+  register: _observed_cr
+
+- name: "Observe: extract step list from CR status"
+  ansible.builtin.set_fact:
+    _observed_steps: >-
+      {{ (_observed_cr.resources | first).status.steps | default([]) }}
+
+- name: "Observe: reset step_statuses"
+  ansible.builtin.set_fact:
+    step_statuses: {}
+
+- name: "Observe: build step_statuses dict (name → status)"
+  ansible.builtin.set_fact:
+    step_statuses: "{{ step_statuses | combine({item.name: item.status}) }}"
+  loop: "{{ _observed_steps }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+# ── Fetch owned Jobs ──────────────────────────────────────────────────────────
+# Label selector: the provisioner stamps all created Jobs with
+#   hci-integration.openshift.io/provisioning: <cr-name>
+# so we can efficiently list only our Jobs.
+
+- name: "Observe: fetch owned Jobs"
+  kubernetes.core.k8s_info:
+    api_version: batch/v1
+    kind: Job
+    namespace: "{{ ansible_operator_meta.namespace }}"
+    label_selectors:
+      - "hci-integration.openshift.io/provisioning={{ ansible_operator_meta.name }}"
+  register: _observed_jobs
+
+# ── Build job_statuses dict ───────────────────────────────────────────────────
+# For each step name determine the corresponding Job's terminal state.
+# Values:
+#   Succeeded  — Job condition type=Complete status=True
+#   Failed     — Job condition type=Failed status=True
+#   Running    — Job exists but neither terminal condition is set
+#   Missing    — no Job found for this step
+
+
+# ── Simpler, explicit job phase resolution ────────────────────────────────────
+# Reset and rebuild cleanly: for each known step name, look up the Job
+# (by step label) in the observed list and classify its phase.
+
+- name: "Observe: reset job_statuses to clean dict"
+  ansible.builtin.set_fact:
+    job_statuses: {}
+
+- name: "Observe: classify Job phase for each step"
+  ansible.builtin.set_fact:
+    job_statuses: "{{ job_statuses | combine({item: _phase}) }}"
+  vars:
+    _step_jobs: >-
+      {{
+        _observed_jobs.resources | default([])
+        | selectattr(
+            'metadata.labels["hci-integration.openshift.io/step"]',
+            'defined'
+          )
+        | selectattr(
+            'metadata.labels["hci-integration.openshift.io/step"]',
+            'equalto', item
+          )
+        | list
+      }}
+    _job_found: "{{ _step_jobs | length > 0 }}"
+    _conditions: >-
+      {{ (_step_jobs | first).status.conditions | default([])
+         if _job_found else [] }}
+    _succeeded: >-
+      {{ _conditions | selectattr('type', 'equalto', 'Complete')
+                     | selectattr('status', 'equalto', 'True')
+                     | list | length > 0 }}
+    _failed: >-
+      {{ _conditions | selectattr('type', 'equalto', 'Failed')
+                     | selectattr('status', 'equalto', 'True')
+                     | list | length > 0 }}
+    _phase: >-
+      {{
+        'Missing'   if not _job_found  else
+        'Succeeded' if _succeeded      else
+        'Failed'    if _failed         else
+        'Running'
+      }}
+  loop: >-
+    {{
+      (bootstrap_steps if mode == 'bootstrap' else teardown_steps)
+      | map(attribute='name') | list
+    }}
+
+- name: "Observe: log world state"
+  ansible.builtin.debug:
+    msg: >-
+      step_statuses={{ step_statuses }}
+      job_statuses={{ job_statuses }}

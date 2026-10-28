@@ -1,0 +1,458 @@
+---
+# advance_steps.yml — act on the diff results to drive the step state machine
+#
+# Inputs (from diff_steps.yml):
+#   steps_to_launch     — create a Job for each; patch step → InProgress
+#   steps_just_complete — patch step → Complete
+#   steps_just_failed   — patch step → Failed; set phase Failed
+#   steps_orphaned      — patch step → Failed (safety net); set phase Failed
+#   all_steps_complete  — if true: set phase Complete; patch HCIConsumer → Ready
+#   any_step_failed     — if true: patch HCIConsumer phase → Failed
+#
+# Status protocol:
+#   Jobs signal completion via exit code only.
+#   The operator is the sole owner of status.steps[] transitions.
+#   Jobs NEVER patch their own step status.
+
+# The operator_sdk k8s_status module replaces the entire status object on each
+# call. Patch individual step entries by rebuilding the full list with
+# loop+combine — never use map('combine', ... if ... else {}).
+
+- name: "Act: fetch current steps for patching"
+  kubernetes.core.k8s_info:
+    api_version: hci-integration.openshift.io/v1alpha1
+    kind: WorkerPoolProvisioning
+    name: "{{ ansible_operator_meta.name }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+  register: _cr_for_patch
+
+- name: "Act: reset _current_steps"
+  ansible.builtin.set_fact:
+    _current_steps: >-
+      {{ (_cr_for_patch.resources | first).status.steps | default([]) }}
+
+# ── Patch Complete transitions ────────────────────────────────────────────────
+
+- name: "Act: reset _patched_steps accumulator"
+  ansible.builtin.set_fact:
+    _patched_steps: []
+
+- name: "Act: accumulate patched steps (Complete/Failed/Orphaned)"
+  ansible.builtin.set_fact:
+    _patched_steps: >-
+      {{
+        _patched_steps + [
+          item | combine(
+            {'status': 'Complete', 'lastTransitionTime': ansible_date_time.iso8601}
+            if item.name in steps_just_complete else
+            {'status': 'Failed', 'message': 'Job completed with non-zero exit code.',
+             'lastTransitionTime': ansible_date_time.iso8601}
+            if item.name in steps_just_failed else
+            {'status': 'Failed',
+             'message': 'Step Job disappeared (evicted or OOMKilled). Reconcile aborted.',
+             'lastTransitionTime': ansible_date_time.iso8601}
+            if item.name in steps_orphaned else
+            {}
+          )
+        ]
+      }}
+  loop: "{{ _current_steps }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: "Act: promote _patched_steps → _current_steps"
+  ansible.builtin.set_fact:
+    _current_steps: "{{ _patched_steps }}"
+  when: >-
+    steps_just_complete | length > 0
+    or steps_just_failed | length > 0
+    or steps_orphaned | length > 0
+
+# ── Write patched step list back ──────────────────────────────────────────────
+
+- name: "Act: write patched step statuses"
+  when: >-
+    steps_just_complete | length > 0
+    or steps_just_failed | length > 0
+    or steps_orphaned | length > 0
+  operator_sdk.util.k8s_status:
+    api_version: hci-integration.openshift.io/v1alpha1
+    kind: WorkerPoolProvisioning
+    name: "{{ ansible_operator_meta.name }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+    status:
+      steps: "{{ _current_steps }}"
+
+# ── Reset WorkerPool to Provisioning at reconcile start ──────────────────────
+# If a previous reconcile incorrectly wrote WorkerPool phase → Failed (e.g. due
+# to the operator_sdk k8s_status bug fixed in diff_steps.yml), the provisioner
+# self-corrects on the next run by writing Provisioning before doing anything.
+# This also ensures the consumer phase gate keeps worker reconcile suspended
+# while bootstrap is genuinely in progress.
+
+- name: "Act: reset WorkerPool phase → Provisioning (bootstrap in progress)"
+  when:
+    - mode == 'bootstrap'
+    - not all_steps_complete
+    - not any_step_failed
+  operator_sdk.util.k8s_status:
+    api_version: hci-integration.openshift.io/v1alpha1
+    kind: WorkerPool
+    name: "{{ worker_pool_ref }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+    status:
+      phase: "Provisioning"
+
+# ── Dispatch steps ready to run ───────────────────────────────────────────────
+# GatewayVM and UDN are handled directly in the Ansible reconcile (no Job).
+# All other steps use the Job scaffold (stub until BS-05/06/02 are implemented).
+
+# ── UDN — direct Ansible dispatch (bootstrap) ────────────────────────────────
+
+- name: "Act: dispatch UDN step (bootstrap)"
+  when:
+    - "'UDN' in steps_to_launch"
+    - mode == 'bootstrap'
+  ansible.builtin.include_tasks: step_udn.yml
+
+# ── UDN — direct Ansible dispatch (teardown) ─────────────────────────────────
+
+- name: "Act: dispatch UDN step (teardown)"
+  when:
+    - "'UDN' in steps_to_launch"
+    - mode == 'teardown'
+  ansible.builtin.include_tasks: step_udn_teardown.yml
+
+# ── GatewayVM — direct Ansible dispatch (bootstrap) ──────────────────────────
+
+- name: "Act: dispatch GatewayVM step (bootstrap)"
+  when:
+    - "'GatewayVM' in steps_to_launch"
+    - mode == 'bootstrap'
+  ansible.builtin.include_tasks: step_gateway_vm.yml
+
+# ── Ignition — direct Ansible dispatch (bootstrap) ───────────────────────────
+
+- name: "Act: dispatch Ignition step (bootstrap)"
+  when:
+    - "'Ignition' in steps_to_launch"
+    - mode == 'bootstrap'
+  ansible.builtin.include_tasks: step_ignition.yml
+
+# ── Ignition — noop (teardown) ────────────────────────────────────────────────
+# The ignition file on the gateway does not need to be removed; once the worker
+# VMs are gone there are no new boots to serve. Mark the step Complete immediately
+# so it does not block the rest of the teardown pipeline.
+
+- name: "Act: dispatch Ignition step (teardown)"
+  when:
+    - "'Ignition' in steps_to_launch"
+    - mode == 'teardown'
+  ansible.builtin.set_fact:
+    _step_result_ignition:
+      status: Complete
+      lastTransitionTime: "{{ ansible_date_time.iso8601 }}"
+      message: "Ignition teardown is a noop — ignition file left on gateway."
+
+# ── GatewayVM — direct Ansible dispatch (teardown) ───────────────────────────
+
+- name: "Act: dispatch GatewayVM step (teardown)"
+  when:
+    - "'GatewayVM' in steps_to_launch"
+    - mode == 'teardown'
+  ansible.builtin.include_tasks: step_gateway_vm_teardown.yml
+
+# ── GatewayVM InProgress → readiness check (bootstrap) ───────────────────────
+# When GatewayVM is InProgress (resources created, waiting for VM to boot),
+# check TCP reachability on external_ip:22 each reconcile.
+
+- name: "Act: check GatewayVM readiness (bootstrap, InProgress)"
+  when:
+    - step_statuses['GatewayVM'] | default('Pending') == 'InProgress'
+    - mode == 'bootstrap'
+  ansible.builtin.include_tasks: step_gateway_vm_readiness.yml
+
+# ── GatewayVM InProgress → deletion check (teardown) ─────────────────────────
+# When GatewayVM is InProgress during teardown (delete issued, waiting for VM
+# and DV to disappear), re-check resource absence on every reconcile.
+# Mirrors the bootstrap readiness re-check above — same pattern, opposite direction.
+
+- name: "Act: check GatewayVM deletion progress (teardown, InProgress)"
+  when:
+    - step_statuses['GatewayVM'] | default('Pending') == 'InProgress'
+    - mode == 'teardown'
+  ansible.builtin.include_tasks: step_gateway_vm_teardown.yml
+
+# ── UDN InProgress → deletion check (teardown) ───────────────────────────────
+# UDN teardown runs in parallel with GatewayVM teardown (no dependency between
+# them). Same re-check pattern: re-enter the teardown task each reconcile while
+# InProgress until the UDN is confirmed absent.
+
+- name: "Act: check UDN deletion progress (teardown, InProgress)"
+  when:
+    - step_statuses['UDN'] | default('Pending') == 'InProgress'
+    - mode == 'teardown'
+  ansible.builtin.include_tasks: step_udn_teardown.yml
+
+# ── Workers — direct Ansible dispatch (teardown) ─────────────────────────────
+
+- name: "Act: dispatch Workers step (teardown)"
+  when:
+    - "'Workers' in steps_to_launch"
+    - mode == 'teardown'
+  ansible.builtin.include_tasks: step_workers_teardown.yml
+
+# ── Workers InProgress → re-check (teardown) ─────────────────────────────────
+
+- name: "Act: re-check Workers step (teardown, InProgress)"
+  when:
+    - step_statuses['Workers'] | default('Pending') == 'InProgress'
+    - mode == 'teardown'
+  ansible.builtin.include_tasks: step_workers_teardown.yml
+
+# ── Consolidated status write ─────────────────────────────────────────────────
+# The operator-sdk proxy caches all k8s_info reads for the duration of the
+# reconcile. Each step task (step_udn.yml, step_gateway_vm.yml, etc.) used to
+# re-fetch the CR and write the full steps array — but every re-fetch returned
+# the pre-reconcile cache snapshot, so concurrent step writes clobbered each other.
+#
+# Fix: step tasks set _step_result_<name> facts instead of writing the CR.
+# Here we merge all results into _current_steps (the cache snapshot) and write
+# the final steps array exactly ONCE.
+#
+# Step result facts (set by step tasks when they ran this reconcile):
+#   _step_result_udn           — UDN dispatch result
+#   _step_result_machineconfig — MachineConfig dispatch/re-check result
+#   _step_result_gatewayvm     — GatewayVM dispatch or readiness-check result
+#
+# Skipped steps (Credentials): marked Complete inline below.
+# !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+# REMOVE the Credentials entry when implementing BS-05.
+# !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+
+- name: "Act: reset _final_steps accumulator"
+  ansible.builtin.set_fact:
+    _final_steps: []
+
+- name: "Act: build final steps array from cache + step results"
+  ansible.builtin.set_fact:
+    _final_steps: >-
+      {{
+        _final_steps + [
+          item | combine(
+            _step_result_udn
+            if item.name == 'UDN' and _step_result_udn is defined
+            else
+            _step_result_machineconfig
+            if item.name == 'MachineConfig' and _step_result_machineconfig is defined
+            else
+            _step_result_gatewayvm
+            if item.name == 'GatewayVM' and _step_result_gatewayvm is defined
+            else
+            _step_result_ignition
+            if item.name == 'Ignition' and _step_result_ignition is defined
+            else
+            _step_result_workers
+            if item.name == 'Workers' and _step_result_workers is defined
+            else
+            {'status': 'Complete',
+             'lastTransitionTime': ansible_date_time.iso8601,
+             'message': 'Step not yet implemented — skipped.'}
+            if item.status == 'Pending'
+               and item.name not in ['UDN', 'GatewayVM', 'Ignition', 'Workers']
+            else {}
+          )
+        ]
+      }}
+  loop: "{{ _current_steps }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+- name: "Act: write consolidated step statuses"
+  operator_sdk.util.k8s_status:
+    api_version: hci-integration.openshift.io/v1alpha1
+    kind: WorkerPoolProvisioning
+    name: "{{ ansible_operator_meta.name }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+    status:
+      phase: "InProgress"
+      steps: "{{ _final_steps }}"
+
+# ── Recompute all_steps_complete and any_step_failed from written state ───────
+
+- name: "Act: recompute terminal flags from _final_steps"
+  ansible.builtin.set_fact:
+    all_steps_complete: >-
+      {{
+        _final_steps | map(attribute='status') | list
+        | difference(['Complete']) | length == 0
+        and _final_steps | length > 0
+      }}
+    any_step_failed: >-
+      {{ 'Failed' in (_final_steps | map(attribute='status') | list) }}
+
+# ── Job-based steps ───────────────────────────────────────────────────────────
+# Placeholder — no real Job steps until implemented.
+
+- name: "Act: set _job_steps_to_launch"
+  ansible.builtin.set_fact:
+    _job_steps_to_launch: []
+
+- name: "Act: launch step Job"
+  when: _job_steps_to_launch | length > 0
+  block:
+
+    - name: "Act: create Job for step"
+      kubernetes.core.k8s:
+        state: present
+        definition:
+          apiVersion: batch/v1
+          kind: Job
+          metadata:
+            name: "hcip-{{ ansible_operator_meta.name }}-{{ item | lower }}"
+            namespace: "{{ ansible_operator_meta.namespace }}"
+            labels:
+              hci-integration.openshift.io/provisioning: "{{ ansible_operator_meta.name }}"
+              hci-integration.openshift.io/step: "{{ item }}"
+            ownerReferences:
+              - apiVersion: hci-integration.openshift.io/v1alpha1
+                kind: WorkerPoolProvisioning
+                name: "{{ ansible_operator_meta.name }}"
+                uid: "{{ (_cr_for_patch.resources | first).metadata.uid }}"
+                controller: true
+                blockOwnerDeletion: true
+          spec:
+            backoffLimit: 0
+            template:
+              metadata:
+                labels:
+                  hci-integration.openshift.io/step: "{{ item }}"
+              spec:
+                restartPolicy: Never
+                containers:
+                  - name: step
+                    # TODO BS-03/02/06/05: replace with real step image + args
+                    image: registry.redhat.io/ubi9/ubi-minimal:latest
+                    command:
+                      - /bin/sh
+                      - -c
+                      - |
+                        echo "TODO: implement step {{ item }}" && exit 1
+      loop: "{{ _job_steps_to_launch }}"
+      loop_control:
+        label: "{{ item }}"
+      register: _launched_jobs
+
+    - name: "Act: fetch updated step list before InProgress patch"
+      kubernetes.core.k8s_info:
+        api_version: hci-integration.openshift.io/v1alpha1
+        kind: WorkerPoolProvisioning
+        name: "{{ ansible_operator_meta.name }}"
+        namespace: "{{ ansible_operator_meta.namespace }}"
+      register: _cr_after_launch
+
+    - name: "Act: reset _steps_after_launch accumulator"
+      ansible.builtin.set_fact:
+        _steps_after_launch: []
+
+    - name: "Act: patch step → InProgress + record jobName"
+      ansible.builtin.set_fact:
+        _steps_after_launch: >-
+          {{
+            _steps_after_launch + [
+              item | combine(
+                {'status': 'InProgress',
+                 'jobName': 'hcip-' + ansible_operator_meta.name + '-' + item.name | lower,
+                 'lastTransitionTime': ansible_date_time.iso8601}
+                if item.name in _job_steps_to_launch else {}
+              )
+            ]
+          }}
+      loop: "{{ (_cr_after_launch.resources | first).status.steps | default([]) }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: "Act: write InProgress step statuses"
+      operator_sdk.util.k8s_status:
+        api_version: hci-integration.openshift.io/v1alpha1
+        kind: WorkerPoolProvisioning
+        name: "{{ ansible_operator_meta.name }}"
+        namespace: "{{ ansible_operator_meta.namespace }}"
+        status:
+          phase: "InProgress"
+          steps: "{{ _steps_after_launch }}"
+
+# ── Phase: Complete → patch HCIConsumer to Ready ──────────────────────────────
+
+- name: "Act: set HCIProvisioning phase Complete"
+  when: all_steps_complete
+  operator_sdk.util.k8s_status:
+    api_version: hci-integration.openshift.io/v1alpha1
+    kind: WorkerPoolProvisioning
+    name: "{{ ansible_operator_meta.name }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+    status:
+      phase: "Complete"
+
+- name: "Act: patch WorkerPool phase → Ready (bootstrap complete)"
+  when:
+    - all_steps_complete
+    - mode == 'bootstrap'
+  operator_sdk.util.k8s_status:
+    api_version: hci-integration.openshift.io/v1alpha1
+    kind: WorkerPool
+    name: "{{ worker_pool_ref }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+    status:
+      phase: "Ready"
+
+- name: "Act: patch WorkerPool phase → Deprovisioned (teardown complete)"
+  when:
+    - all_steps_complete
+    - mode == 'teardown'
+  operator_sdk.util.k8s_status:
+    api_version: hci-integration.openshift.io/v1alpha1
+    kind: WorkerPool
+    name: "{{ worker_pool_ref }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+    status:
+      phase: "Deprovisioned"
+
+# ── Phase: Failed → surface to WorkerPool ────────────────────────────────────
+
+- name: "Act: set HCIProvisioning phase Failed"
+  when: any_step_failed
+  operator_sdk.util.k8s_status:
+    api_version: hci-integration.openshift.io/v1alpha1
+    kind: WorkerPoolProvisioning
+    name: "{{ ansible_operator_meta.name }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+    status:
+      phase: "Failed"
+
+- name: "Act: find first failed step for error message"
+  when: any_step_failed
+  ansible.builtin.set_fact:
+    _failed_step: >-
+      {{
+        _current_steps
+        | selectattr('status', 'equalto', 'Failed')
+        | first | default({'name': 'unknown', 'message': 'Unknown failure'})
+      }}
+
+- name: "Act: patch WorkerPool phase → Failed"
+  when: any_step_failed
+  operator_sdk.util.k8s_status:
+    api_version: hci-integration.openshift.io/v1alpha1
+    kind: WorkerPool
+    name: "{{ worker_pool_ref }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+    status:
+      phase: "Failed"
+      conditions:
+        - type: "ProvisioningFailed"
+          status: "True"
+          reason: "StepFailed"
+          message: >-
+            WorkerPoolProvisioning step '{{ _failed_step.name }}' failed:
+            {{ _failed_step.message | default('see Job logs') }}

@@ -1,0 +1,126 @@
+---
+# diff_steps.yml — walk the dependency graph and produce action lists
+#
+# Inputs (from observe_world.yml):
+#   step_statuses   dict  { "GatewayVM": "Pending", ... }
+#   job_statuses    dict  { "GatewayVM": "Missing", ... }
+#   bootstrap_steps / teardown_steps  (from defaults)
+#
+# Outputs (facts set here, consumed by advance_steps.yml):
+#   steps_to_launch     list of step names whose deps are all Complete
+#                       AND whose current status is Pending (no Job yet)
+#   steps_just_complete list of step names whose Job just Succeeded
+#                       AND whose step status is still InProgress
+#   steps_just_failed   list of step names whose Job just Failed
+#                       AND whose step status is still InProgress
+#   steps_orphaned      list of InProgress step names whose Job is Missing
+#                       (safety net: Job evicted / OOMKilled)
+#   all_steps_complete  bool — true when every step status == Complete
+#   any_step_failed     bool — true when any step status == Failed
+
+- name: "Diff: select active step definition list"
+  ansible.builtin.set_fact:
+    _active_steps: >-
+      {{ bootstrap_steps if mode == 'bootstrap' else teardown_steps }}
+
+# ── Dependency resolution: find steps ready to launch ────────────────────────
+# A step is ready to launch when:
+#   1. Its current status is Pending (not already started or finished)
+#   2. All steps in its depends_on list have status == Complete
+#   3. There is no existing Job for it (job_status == Missing)
+
+- name: "Diff: reset steps_to_launch"
+  ansible.builtin.set_fact:
+    steps_to_launch: []
+
+- name: "Diff: evaluate launch eligibility for each step"
+  ansible.builtin.set_fact:
+    steps_to_launch: "{{ steps_to_launch + [item.name] }}"
+  when:
+    - step_statuses[item.name] is defined
+    - step_statuses[item.name] == 'Pending'
+    - job_statuses[item.name] | default('Missing') == 'Missing'
+    - item.depends_on | map('extract', step_statuses) | list
+      | difference(['Complete']) | length == 0
+  loop: "{{ _active_steps }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+# ── Detect steps that just completed ─────────────────────────────────────────
+# Job Succeeded but step status is still InProgress → transition to Complete
+
+- name: "Diff: reset steps_just_complete"
+  ansible.builtin.set_fact:
+    steps_just_complete: []
+
+- name: "Diff: detect just-completed steps"
+  ansible.builtin.set_fact:
+    steps_just_complete: "{{ steps_just_complete + [item.name] }}"
+  when:
+    - step_statuses[item.name] | default('Pending') == 'InProgress'
+    - job_statuses[item.name] | default('Missing') == 'Succeeded'
+  loop: "{{ _active_steps }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+# ── Detect steps that just failed ────────────────────────────────────────────
+
+- name: "Diff: reset steps_just_failed"
+  ansible.builtin.set_fact:
+    steps_just_failed: []
+
+- name: "Diff: detect just-failed steps"
+  ansible.builtin.set_fact:
+    steps_just_failed: "{{ steps_just_failed + [item.name] }}"
+  when:
+    - step_statuses[item.name] | default('Pending') == 'InProgress'
+    - job_statuses[item.name] | default('Missing') == 'Failed'
+  loop: "{{ _active_steps }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+# ── Detect orphaned steps (InProgress but Job is Missing) ────────────────────
+# Safety net: Job was evicted, OOMKilled, or manually deleted.
+# Excludes direct-Ansible steps (GatewayVM, UDN) — these never create a Job,
+# so job_status is always 'Missing' for them while InProgress. Their readiness
+# is re-checked on every reconcile by their own include_tasks, not by Job status.
+
+- name: "Diff: reset steps_orphaned"
+  ansible.builtin.set_fact:
+    steps_orphaned: []
+
+- name: "Diff: detect orphaned steps"
+  ansible.builtin.set_fact:
+    steps_orphaned: "{{ steps_orphaned + [item.name] }}"
+  when:
+    - step_statuses[item.name] | default('Pending') == 'InProgress'
+    - job_statuses[item.name] | default('Missing') == 'Missing'
+    - item.name not in ['GatewayVM', 'UDN']
+  loop: "{{ _active_steps }}"
+  loop_control:
+    label: "{{ item.name }}"
+
+# ── Terminal state checks ─────────────────────────────────────────────────────
+
+- name: "Diff: check all_steps_complete"
+  ansible.builtin.set_fact:
+    all_steps_complete: >-
+      {{
+        step_statuses.values() | list | difference(['Complete']) | length == 0
+        and step_statuses | length > 0
+      }}
+
+- name: "Diff: check any_step_failed"
+  ansible.builtin.set_fact:
+    any_step_failed: >-
+      {{ 'Failed' in (step_statuses.values() | list) }}
+
+- name: "Diff: log action lists"
+  ansible.builtin.debug:
+    msg: >-
+      steps_to_launch={{ steps_to_launch }}
+      steps_just_complete={{ steps_just_complete }}
+      steps_just_failed={{ steps_just_failed }}
+      steps_orphaned={{ steps_orphaned }}
+      all_steps_complete={{ all_steps_complete }}
+      any_step_failed={{ any_step_failed }}

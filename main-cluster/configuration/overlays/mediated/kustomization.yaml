@@ -1,0 +1,12 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: openshift-machine-config-operator
+
+bases:
+  - ../../base
+
+# z/VM variant needs no additional resources
+# Base configuration is sufficient for private network setup
+
+# Made with Bob

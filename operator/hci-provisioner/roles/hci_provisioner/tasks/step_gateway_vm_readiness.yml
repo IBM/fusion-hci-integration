@@ -1,0 +1,100 @@
+---
+# step_gateway_vm_readiness.yml — BS-04 bootstrap readiness check
+#
+# Called from advance_steps.yml on every reconcile while GatewayVM step is InProgress.
+#
+# Checks TCP reachability on gateway.external_ip:22 (SSH port).
+# On success  → sets _step_result_gatewayvm fact → Complete
+# On timeout  → sets _step_result_gatewayvm fact → Failed
+# While waiting → sets _step_result_gatewayvm fact → InProgress (no change)
+#
+# Timeout is measured from step.lastTransitionTime (set when step moved to InProgress).
+# advance_steps.yml owns the single consolidated CR status write.
+
+# ── Read lastTransitionTime from the cached CR snapshot ──────────────────────
+# step_statuses is built from observe_world's cache snapshot — it contains the
+# steps list as it was at reconcile start. GatewayVM.lastTransitionTime is stable
+# (set once when the step first moved to InProgress) so reading from cache is fine.
+
+# _current_steps is set in advance_steps.yml before dispatching step tasks.
+- name: "BS-04 readiness | Extract GatewayVM step record from _current_steps"
+  ansible.builtin.set_fact:
+    _gw_step: >-
+      {{
+        _current_steps
+        | selectattr('name', 'equalto', 'GatewayVM')
+        | list
+        | first
+        | default({'lastTransitionTime': ansible_date_time.iso8601})
+      }}
+
+# ── Elapsed time since InProgress ────────────────────────────────────────────
+# to_datetime('%Y-%m-%dT%H:%M:%S%z').timestamp() requires Python 3.7+.
+# Python 3.6 (Ansible 2.9 / ose-ansible-operator) does not support %z in
+# strptime. Compute epoch from the UTC ISO8601 string using pure arithmetic:
+#   strip the trailing Z, split on T, split date/time fields, then apply
+#   the standard epoch formula (no DST, always UTC).
+
+- name: "BS-04 readiness | Compute elapsed seconds since InProgress"
+  ansible.builtin.set_fact:
+    _gw_elapsed_seconds: >-
+      {%- set _ts = _gw_step.lastTransitionTime | regex_replace('\\.[0-9]+Z?$', '') | regex_replace('Z$', '') -%}
+      {%- set _date = _ts.split('T')[0].split('-') -%}
+      {%- set _time = _ts.split('T')[1].split(':') -%}
+      {%- set _y = _date[0] | int -%}
+      {%- set _m = _date[1] | int -%}
+      {%- set _d = _date[2] | int -%}
+      {%- set _H = _time[0] | int -%}
+      {%- set _M = _time[1] | int -%}
+      {%- set _S = _time[2] | int -%}
+      {%- set _days_in_month = [0,31,28,31,30,31,30,31,31,30,31,30,31] -%}
+      {%- set _leap = (_y % 4 == 0 and (_y % 100 != 0 or _y % 400 == 0)) | int -%}
+      {%- set _yday = namespace(v=_d) -%}
+      {%- for _mi in range(1, _m) -%}
+        {%- set _dim = _days_in_month[_mi] + (1 if (_mi == 2 and _leap) else 0) -%}
+        {%- set _yday.v = _yday.v + _dim -%}
+      {%- endfor -%}
+      {%- set _era_days = (_y - 1970) * 365 + ((_y - 1969) // 4) - ((_y - 1901) // 100) + ((_y - 1601) // 400) + _yday.v - 1 -%}
+      {%- set _transition_epoch = _era_days * 86400 + _H * 3600 + _M * 60 + _S -%}
+      {{ ansible_date_time.epoch | int - _transition_epoch }}
+
+# ── TCP reachability probe ────────────────────────────────────────────────────
+
+- name: "BS-04 readiness | Probe SSH port on {{ infrastructure.gateway.ip }}:22"
+  ansible.builtin.wait_for:
+    host: "{{ infrastructure.gateway.ip }}"
+    port: 22
+    timeout: 5
+    state: started
+  register: _gw_ssh_probe
+  ignore_errors: true
+
+# ── Set result fact ───────────────────────────────────────────────────────────
+# advance_steps.yml reads _step_result_gatewayvm and merges it into the
+# consolidated status write. No CR write here.
+
+- name: "BS-04 readiness | Set step result → Complete"
+  when: _gw_ssh_probe is succeeded
+  ansible.builtin.set_fact:
+    _step_result_gatewayvm:
+      status: Complete
+      lastTransitionTime: "{{ ansible_date_time.iso8601 }}"
+      message: "Gateway VM is reachable on {{ infrastructure.gateway.ip }}:22 after ~{{ _gw_elapsed_seconds }}s."
+
+- name: "BS-04 readiness | Set step result → Failed (timeout)"
+  when:
+    - _gw_ssh_probe is failed
+    - _gw_elapsed_seconds | int >= gateway_vm_timeout_seconds | int
+  ansible.builtin.set_fact:
+    _step_result_gatewayvm:
+      status: Failed
+      lastTransitionTime: "{{ ansible_date_time.iso8601 }}"
+      message: "Gateway VM not reachable on {{ infrastructure.gateway.ip }}:22 after {{ _gw_elapsed_seconds }}s (timeout {{ gateway_vm_timeout_seconds }}s). Check VM console on HCI."
+
+- name: "BS-04 readiness | Log result"
+  ansible.builtin.debug:
+    msg: >-
+      GatewayVM readiness:
+      {{ 'Complete — SSH reachable' if _gw_ssh_probe is succeeded else
+         'Failed — timeout' if _gw_elapsed_seconds | int >= gateway_vm_timeout_seconds | int else
+         'waiting (' + _gw_elapsed_seconds | string + 's / ' + gateway_vm_timeout_seconds | string + 's)' }}.

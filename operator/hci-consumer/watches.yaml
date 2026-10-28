@@ -1,0 +1,38 @@
+---
+# watches.yaml — maps Kubernetes CR kinds to Ansible roles
+#
+# When a WorkerPool CR is created, modified, or deleted, the operator runner
+# invokes the hci_consumer role, passing the CR's spec fields as Ansible variables.
+#
+# The finalizer ensures the role is also called on deletion, allowing the role
+# to clean up resources (drain nodes, delete VMs) before the CR is removed.
+#
+# reconcilePeriod: required so that scale-down/scale-up loops continue to make
+#   progress even when no CR spec/status change event arrives. Without it the
+#   operator only fires on watch events; async steps (waiting for a node to
+#   drain, waiting for a new VM node to join) never re-check.
+#   60 s matches the provisioner cadence; reduce to 30 s for faster feedback.
+#
+# manageStatus: false — the role owns all status writes via operator_sdk.util.k8s_status.
+#   The default (true) causes the framework to overwrite the CR status with an
+#   empty object after every role run, losing phase, worker counts and conditions.
+#
+# watchDependentResources: false — the consumer does not own child resources whose
+#   watch events should trigger re-reconciliation. Progress is detected via the
+#   reconcilePeriod re-entry, not by watch events on VMs or nodes.
+#
+# gatheredFacts: true — the role uses ansible_date_time for log timestamps and
+#   bootfiles version comparisons. The ose-ansible-operator runner sets
+#   gather_facts=false by default; override it here.
+
+- version: v1alpha1
+  group: hci-integration.openshift.io
+  kind: WorkerPool
+  role: hci_consumer
+  reconcilePeriod: 60s
+  manageStatus: false
+  watchDependentResources: false
+  gatheredFacts: true
+  finalizer:
+    name: hci-integration.openshift.io/cleanup
+    role: hci_consumer_cleanup

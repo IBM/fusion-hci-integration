@@ -1,0 +1,73 @@
+---
+# Sample WorkerPoolProvisioning CR
+#
+# In normal operation this CR is created automatically by the hci-consumer
+# operator — you never apply it by hand. This sample is provided for:
+#   - Development and testing of the hci-provisioner operator in isolation
+#   - Validating the CRD schema
+#   - Running a single step via run-local.sh against a real cluster
+#
+# Apply with:
+#   oc apply -f config/samples/workerpoolprovisioning-sample.yaml
+#
+# The ownerReference below is illustrative — when the real WorkerPool operator
+# creates this CR it will supply the correct UID. Remove ownerReferences for
+# manual tests.
+
+apiVersion: hci-integration.openshift.io/v1alpha1
+kind: WorkerPoolProvisioning
+metadata:
+  name: hci-workers-provisioning
+  namespace: hci-node-manager
+  # ownerReferences are set automatically by the hci-consumer operator.
+  # ownerReferences:
+  #   - apiVersion: hci-integration.openshift.io/v1alpha1
+  #     kind: WorkerPool
+  #     name: hci-workers
+  #     uid: <uid-from-workerpool>
+  #     controller: true
+  #     blockOwnerDeletion: true
+spec:
+  workerPoolRef: hci-workers
+  mode: bootstrap          # bootstrap | teardown
+
+  providerAccess:
+    apiEndpoint: "https://api.hci.example.com:6443"
+    namespace: "main-cluster-workers"
+    credentialsSecret: "hci-provisioner-credentials"
+
+  infrastructure:
+    gateway:
+      ip: "172.16.1.100"
+      prefixLength: 16                    # /16 defines the eth1 network for NAT rules
+      defaultRouter: "172.16.0.1"
+      # resources: optional — defaults in operator role
+
+    network:
+      machineConfigPool: hci-vm           # must match WorkerPool.spec.consumer.machineConfigPool
+      topology: direct
+      macPrefix: "52:54:00"
+      internalSubnet: "192.168.100.0/24"
+      dnsServer: "172.16.0.1"         # consumer bastion — resolves cluster-internal names
+      # internalNetwork: "10.0.0.0/24"   # mediated only
+      # internalGateway: "172.16.0.1" # mediated only
+
+    capacity:
+      maxPoolSize: 10
+
+# status is managed entirely by the hci-provisioner operator.
+# Initial state when the CR is first created:
+#
+# status:
+#   phase: Pending
+#   steps:
+#     - name: GatewayVM
+#       status: Pending
+#     - name: UDN
+#       status: Pending
+#     - name: MachineConfig
+#       status: Pending
+#     - name: Ignition
+#       status: Pending
+#     - name: Credentials
+#       status: Pending

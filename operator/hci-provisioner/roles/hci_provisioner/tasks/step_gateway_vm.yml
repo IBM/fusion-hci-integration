@@ -1,0 +1,395 @@
+---
+# step_gateway_vm.yml — BS-04 bootstrap path
+#
+# Called from advance_steps.yml when GatewayVM step is Pending and mode==bootstrap.
+#
+# Responsibilities:
+#   1. Read HCIConsumer CR for worker name prefix and pool size (DHCP pre-pool)
+#   2. Discover cluster domain from LO DNS/cluster CR
+#   3. Derive all computed gateway networking values
+#   4. Read SSH key from 99-worker-ssh MachineConfig
+#   5. Write temp kubeconfig from provisioner credentials Secret
+#   6. Render gateway-vm-cloudinit.j2 template to temp file
+#   7. Apply cloud-init Secret, DataVolume, VirtualMachine on HCI
+#   8. Patch GatewayVM step → InProgress with lastTransitionTime
+#
+# Derived values (convention-over-configuration):
+#   gateway VM name  : hci-gateway
+#   external MAC     : <networking.mac_prefix>:00:00:01
+#   internal MAC     : <networking.mac_prefix>:00:00:02
+#   internal IP      : internalSubnet network address + .1
+#   worker start IP  : internalSubnet network address + .10
+#
+# The readiness check (InProgress → Complete/Failed) is in step_gateway_vm_readiness.yml
+# and is called separately on each reconcile while the step is InProgress.
+
+# ── Materialise gateway.resources with defaults ───────────────────────────────
+# spec.infrastructure.gateway.resources is optional in the WorkerPool / WPP CR.
+# The operator runner overwrites the entire 'infrastructure' variable from the
+# CR spec, so role defaults for any sub-key the CR omits are lost.
+# Read each field individually with | default() here before any k8s_info call
+# so downstream tasks always have a fully-populated _gw_res dict.
+
+- name: "BS-04 | Materialise gateway resource spec with defaults"
+  ansible.builtin.set_fact:
+    _gw_res:
+      # cpu must be an integer — KubeVirt rejects strings for uint32 fields.
+      cpu:                   "{{ (infrastructure['gateway'].get('resources') or {}).get('cpu',                  2) | int }}"
+      memory:                "{{ (infrastructure['gateway'].get('resources') or {}).get('memory',             '4Gi') }}"
+      storage:               "{{ (infrastructure['gateway'].get('resources') or {}).get('storage',           '30Gi') }}"
+      storage_class:         "{{ (infrastructure['gateway'].get('resources') or {}).get('storageClass',      'ocs-storagecluster-ceph-rbd-virtualization') }}"
+      data_source_name:      "{{ (infrastructure['gateway'].get('resources') or {}).get('dataSourceName',    'centos-stream9') }}"
+      data_source_namespace: "{{ (infrastructure['gateway'].get('resources') or {}).get('dataSourceNamespace', 'openshift-virtualization-os-images') }}"
+
+# ── Read HCIConsumer CR for worker pool parameters ────────────────────────────
+# The provisioner needs workers.namePrefix and provider.maxPoolSize to generate
+# the DHCP static pre-pool. These live in the HCIConsumer CR, referenced by
+# consumer_ref. The HCIProvisioning CRD does not carry workers.* fields.
+
+- name: "BS-04 | Fetch WorkerPool CR for worker pool parameters"
+  kubernetes.core.k8s_info:
+    api_version: hci-integration.openshift.io/v1alpha1
+    kind: WorkerPool
+    name: "{{ worker_pool_ref }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+  register: _gw_consumer_cr
+
+- name: "BS-04 | Abort if WorkerPool CR not found"
+  when: _gw_consumer_cr.resources | length == 0
+  ansible.builtin.fail:
+    msg: >-
+      WorkerPool CR '{{ worker_pool_ref }}' not found in namespace
+      '{{ ansible_operator_meta.namespace }}'. Cannot derive worker pool parameters.
+
+# ── Read cluster version for initial desired-version.txt ─────────────────────
+# Baking desired-version.txt into cloud-init means rhcos-sync.timer starts the
+# download immediately on first boot without waiting for the consumer's first
+# reconcile to write it via SSH.
+
+- name: "BS-04 | Fetch ClusterVersion CR"
+  kubernetes.core.k8s_info:
+    api_version: config.openshift.io/v1
+    kind: ClusterVersion
+    name: version
+  register: _gw_cluster_version_cr
+
+- name: "BS-04 | Extract desired cluster stream (major.minor)"
+  ansible.builtin.set_fact:
+    _gw_rhcos_stream: >-
+      {{
+        (_gw_cluster_version_cr.resources | first).status.desired.version
+        .split('.')[:2] | join('.')
+        if _gw_cluster_version_cr.resources | length > 0
+        else ''
+      }}
+
+# ── Discover cluster domain from LO DNS CR ────────────────────────────────────
+
+- name: "BS-04 | Fetch cluster DNS CR for baseDomain"
+  kubernetes.core.k8s_info:
+    api_version: config.openshift.io/v1
+    kind: DNS
+    name: cluster
+  register: _gw_dns_cr
+
+- name: "BS-04 | Abort if DNS CR not found"
+  when: _gw_dns_cr.resources | length == 0
+  ansible.builtin.fail:
+    msg: >-
+      config.openshift.io/v1 DNS/cluster not found.
+      Cannot determine cluster baseDomain for gateway cloud-init.
+
+# ── Derive all computed values ────────────────────────────────────────────────
+
+- name: "BS-04 | Derive gateway VM networking values"
+  ansible.builtin.set_fact:
+    _gw_name: "hci-gateway"
+    _gw_dv_name: "hci-gateway-rootdisk"
+    _gw_cloudinit_secret: "hci-gateway-cloudinit"
+    _gw_external_mac: "{{ infrastructure.network.mac_prefix }}:00:00:01"
+    _gw_internal_mac: "{{ infrastructure.network.mac_prefix }}:00:00:02"
+    _gw_internal_ip: >-
+      {{ infrastructure.network.internal_subnet
+         | regex_replace('/.*$', '')
+         | regex_replace('\.[0-9]+$', '') }}.1
+    _gw_internal_prefix: >-
+      {{ infrastructure.network.internal_subnet | regex_replace('^.*/', '') }}
+    _gw_worker_start_ip: >-
+      {{ infrastructure.network.internal_subnet
+         | regex_replace('/.*$', '')
+         | regex_replace('\.[0-9]+$', '') }}.10
+    _gw_cluster_domain: >-
+      {{ (_gw_dns_cr.resources | first).spec.baseDomain }}
+    _gw_worker_name_prefix: >-
+      {{ (_gw_consumer_cr.resources | first).spec.consumer.workers.namePrefix | default('worker-x86') }}
+    _gw_max_pool_size: >-
+      {{ (_gw_consumer_cr.resources | first).spec.provider.maxPoolSize | default(10) }}
+
+# ── Read admin SSH public key from local cluster MachineConfig ───────────────
+# The admin SSH key for the gateway VM core user comes from the 99-worker-ssh
+# MachineConfig on the LO cluster — the same cluster the operator runs on.
+# No CR field needed; this is the cluster's own key.
+# The provisioner automation key (_provisioner_ssh_public_key) is produced by
+# ensure_provisioner_ssh_key.yml which runs earlier in main.yml and is already
+# available as a fact at this point.
+
+- name: "BS-04 | Fetch 99-worker-ssh MachineConfig"
+  kubernetes.core.k8s_info:
+    api_version: machineconfiguration.openshift.io/v1
+    kind: MachineConfig
+    name: 99-worker-ssh
+  register: _gw_mc_ssh
+
+- name: "BS-04 | Abort if 99-worker-ssh MachineConfig not found"
+  when: _gw_mc_ssh.resources | length == 0
+  ansible.builtin.fail:
+    msg: >-
+      MachineConfig '99-worker-ssh' not found on local cluster.
+      Cannot populate SSH authorized key for gateway VM cloud-init.
+
+- name: "BS-04 | Extract SSH authorized key for core user"
+  ansible.builtin.set_fact:
+    _gw_ssh_key: >-
+      {{
+        (_gw_mc_ssh.resources | first)
+        .spec.config.passwd.users
+        | selectattr('name', 'equalto', 'core')
+        | map(attribute='sshAuthorizedKeys')
+        | first
+        | first
+      }}
+
+- name: "BS-04 | Abort if SSH key could not be extracted"
+  when: _gw_ssh_key | length == 0
+  ansible.builtin.fail:
+    msg: >-
+      No sshAuthorizedKeys found for user 'core' in MachineConfig '99-worker-ssh'.
+
+# ── Write HCI kubeconfig from credentials Secret ──────────────────────────────
+
+- name: "BS-04 | Read provisioner credentials Secret"
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: "{{ provider_access.credentials_secret }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+  register: _gw_prov_secret
+
+- name: "BS-04 | Write HCI kubeconfig to temp file"
+  ansible.builtin.tempfile:
+    state: file
+    suffix: ".kubeconfig"
+  register: _gw_kubeconfig_file
+
+- name: "BS-04 | Populate HCI kubeconfig temp file"
+  ansible.builtin.copy:
+    content: >-
+      {{
+        (_gw_prov_secret.resources | first).data.kubeconfig
+        | b64decode
+      }}
+    dest: "{{ _gw_kubeconfig_file.path }}"
+    mode: "0600"
+
+# ── Cloud-init Secret ─────────────────────────────────────────────────────────
+# Render the Jinja2 template to a temp file, then read it back for the Secret.
+# This avoids embedding multi-kilobyte nested YAML inside a task file and keeps
+# indentation unambiguous. The template is roles/hci_provisioner/templates/
+# gateway-vm-cloudinit.j2 — all _gw_* variables set above are available to it.
+
+- name: "BS-04 | Create temp file for rendered cloud-init"
+  ansible.builtin.tempfile:
+    state: file
+    suffix: ".cloudinit"
+  register: _gw_cloudinit_tmp
+
+- name: "BS-04 | Render gateway-vm-cloudinit.j2 to temp file"
+  ansible.builtin.template:
+    src: gateway-vm-cloudinit.j2
+    dest: "{{ _gw_cloudinit_tmp.path }}"
+    mode: "0600"
+
+- name: "BS-04 | Apply cloud-init Secret on HCI"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ _gw_kubeconfig_file.path }}"
+    state: present
+    definition:
+      apiVersion: v1
+      kind: Secret
+      metadata:
+        name: "{{ _gw_cloudinit_secret }}"
+        namespace: "{{ provider_access.namespace }}"
+        labels:
+          app: worker-vm-router
+          hci-integration.openshift.io/managed-by: hci-provisioner-operator
+          hci-integration.openshift.io/consumer: "{{ worker_pool_ref }}"
+      type: Opaque
+      stringData:
+        userdata: "{{ lookup('file', _gw_cloudinit_tmp.path) }}"
+
+- name: "BS-04 | Remove cloud-init temp file"
+  ansible.builtin.file:
+    path: "{{ _gw_cloudinit_tmp.path }}"
+    state: absent
+
+# ── DataVolume ────────────────────────────────────────────────────────────────
+# Build the definition as a fact first to avoid Ansible 2.9's template engine
+# confusing the literal YAML key 'resources:' with the Ansible variable scope
+# when the definition is written inline.
+
+- name: "BS-04 | Build DataVolume definition"
+  ansible.builtin.set_fact:
+    _gw_dv_definition: >-
+      {{
+        {
+          'apiVersion': 'cdi.kubevirt.io/v1beta1',
+          'kind': 'DataVolume',
+          'metadata': {
+            'name': _gw_dv_name,
+            'namespace': provider_access.namespace,
+            'labels': {
+              'app': 'worker-vm-router',
+              'hci-integration.openshift.io/managed-by': 'hci-provisioner-operator',
+              'hci-integration.openshift.io/consumer': worker_pool_ref
+            }
+          },
+          'spec': {
+            'pvc': {
+              'accessModes': ['ReadWriteOnce'],
+              'resources': {'requests': {'storage': _gw_res.storage}},
+              'storageClassName': _gw_res.storage_class,
+              'volumeMode': 'Block'
+            },
+            'sourceRef': {
+              'kind': 'DataSource',
+              'name': _gw_res.data_source_name,
+              'namespace': _gw_res.data_source_namespace
+            }
+          }
+        }
+      }}
+
+- name: "BS-04 | Apply DataVolume on HCI"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ _gw_kubeconfig_file.path }}"
+    state: present
+    definition: "{{ _gw_dv_definition }}"
+
+# ── VirtualMachine ────────────────────────────────────────────────────────────
+
+# Build the definition as a fact first — same reason as DataVolume above:
+# the inline 'resources:' key collides with Ansible 2.9 variable scope resolution.
+
+- name: "BS-04 | Build VirtualMachine definition"
+  ansible.builtin.set_fact:
+    _gw_vm_definition: >-
+      {{
+        {
+          'apiVersion': 'kubevirt.io/v1',
+          'kind': 'VirtualMachine',
+          'metadata': {
+            'name': _gw_name,
+            'namespace': provider_access.namespace,
+            'labels': {
+              'app': 'worker-vm-router',
+              'role': 'router',
+              'hci-integration.openshift.io/managed-by': 'hci-provisioner-operator',
+              'hci-integration.openshift.io/consumer': worker_pool_ref
+            }
+          },
+          'spec': {
+            'running': true,
+            'template': {
+              'metadata': {
+                'labels': {'kubevirt.io/vm': _gw_name, 'app': 'worker-vm-router'},
+                'annotations': {
+                  'k8s.ovn.org/network-attachments': '[{"name":"router-external-network","interface":"external"},{"name":"router-internal-network","interface":"internal"}]'
+                }
+              },
+              'spec': {
+                'domain': {
+                  'cpu': {
+                    'cores': _gw_res.cpu | int,
+                    'sockets': 1,
+                    'threads': 1
+                  },
+                  'devices': {
+                    'disks': [
+                      {'disk': {'bus': 'virtio'}, 'name': 'rootdisk'},
+                      {'disk': {'bus': 'virtio'}, 'name': 'cloudinitdisk'}
+                    ],
+                    'interfaces': [
+                      {'name': 'default', 'masquerade': {}},
+                      {'name': 'external', 'bridge': {}, 'macAddress': _gw_external_mac},
+                      {'name': 'internal', 'bridge': {}, 'macAddress': _gw_internal_mac}
+                    ],
+                    'networkInterfaceMultiqueue': true
+                  },
+                  'machine': {'type': 'q35'},
+                  'resources': {'requests': {'memory': _gw_res.memory}}
+                },
+                'networks': [
+                  {'name': 'default', 'pod': {}},
+                  {'name': 'external', 'multus': {'networkName': 'router-external-network'}},
+                  {'name': 'internal', 'multus': {'networkName': 'router-internal-network'}}
+                ],
+                'volumes': [
+                  {'dataVolume': {'name': _gw_dv_name}, 'name': 'rootdisk'},
+                  {'cloudInitNoCloud': {'secretRef': {'name': _gw_cloudinit_secret}}, 'name': 'cloudinitdisk'}
+                ]
+              }
+            }
+          }
+        }
+      }}
+
+- name: "BS-04 | Apply VirtualMachine on HCI"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ _gw_kubeconfig_file.path }}"
+    state: present
+    definition: "{{ _gw_vm_definition }}"
+
+# ── Clean up kubeconfig temp file ─────────────────────────────────────────────
+
+- name: "BS-04 | Remove HCI kubeconfig temp file"
+  ansible.builtin.file:
+    path: "{{ _gw_kubeconfig_file.path }}"
+    state: absent
+
+# ── SSH probe — attempt immediately after resource creation ───────────────────
+# Same logic as step_gateway_vm_readiness.yml but with lastTransitionTime = now.
+# If SSH is already reachable (e.g. idempotent re-apply on existing VM): Complete.
+# If not reachable: InProgress — next reconcile will probe again.
+# timeout=5 keeps the probe non-blocking within the reconcile run.
+
+- name: "BS-04 | Probe SSH port on {{ infrastructure.gateway.ip }}:22"
+  ansible.builtin.wait_for:
+    host: "{{ infrastructure.gateway.ip }}"
+    port: 22
+    timeout: 5
+    state: started
+  register: _gw_ssh_probe_initial
+  ignore_errors: true
+
+# ── Signal result to advance_steps.yml ───────────────────────────────────────
+# Do NOT write to the CR here — advance_steps.yml owns the single consolidated
+# status write. Proxy cache means concurrent per-step writes clobber each other.
+
+- name: "BS-04 | Set step result fact → Complete or InProgress"
+  ansible.builtin.set_fact:
+    _step_result_gatewayvm:
+      status: "{{ 'Complete' if _gw_ssh_probe_initial is succeeded else 'InProgress' }}"
+      lastTransitionTime: "{{ ansible_date_time.iso8601 }}"
+      message: >-
+        {{
+          'Gateway VM is reachable on ' + infrastructure.gateway.ip + ':22.'
+          if _gw_ssh_probe_initial is succeeded else
+          'Gateway VM resources created on provider cluster. Waiting for SSH reachability on ' + infrastructure.gateway.ip + ':22.'
+        }}
+
+- name: "BS-04 | Log GatewayVM initial probe result"
+  ansible.builtin.debug:
+    msg: >-
+      GatewayVM step → {{ _step_result_gatewayvm.status }}.
+      SSH probe on {{ infrastructure.gateway.ip }}:22:
+      {{ 'reachable' if _gw_ssh_probe_initial is succeeded else 'not yet reachable — will retry on next reconcile' }}.

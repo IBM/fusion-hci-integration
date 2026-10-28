@@ -1,0 +1,16 @@
+---
+# Default variable values for the hci_consumer_cleanup role.
+
+provider:
+  credentials_secret: "hci-provider-credentials"
+  namespace: ""
+  api_endpoint: ""
+
+networking:
+  topology: "direct"
+  mac_prefix: "52:54:00"
+  internal_subnet: "192.168.100.0/24"
+
+workers:
+  name_prefix: "worker-x86"
+  count: 0

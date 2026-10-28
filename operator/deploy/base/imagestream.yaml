@@ -1,0 +1,24 @@
+---
+# deploy/base/imagestream.yaml
+# ImageStream objects receive the build output and are referenced by Deployments.
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: hci-consumer-operator
+  namespace: hci-node-manager
+  labels:
+    app.kubernetes.io/part-of: hci-integration
+spec:
+  lookupPolicy:
+    local: true
+---
+apiVersion: image.openshift.io/v1
+kind: ImageStream
+metadata:
+  name: hci-provisioner-operator
+  namespace: hci-node-manager
+  labels:
+    app.kubernetes.io/part-of: hci-integration
+spec:
+  lookupPolicy:
+    local: true

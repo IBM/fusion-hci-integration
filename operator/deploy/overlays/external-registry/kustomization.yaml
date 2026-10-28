@@ -1,0 +1,23 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# External registry overlay.
+# Used when images are pushed to an external registry (Quay, Artifactory, etc.)
+# or pulled via a bastion proxy.
+#
+# Image references are managed by `make deploy` via `kustomize edit set image`.
+# Do not edit the images: block by hand — run make deploy instead.
+#
+# If the external registry requires authentication, create a pull secret and
+# add it to the ServiceAccount or to the Deployment via imagePullSecrets.
+
+resources:
+  - ../../base
+
+images:
+  - name: hci-consumer-operator
+    newName: registry.example.com/hci-integration/hci-consumer-operator
+    newTag: latest
+  - name: hci-provisioner-operator
+    newName: registry.example.com/hci-integration/hci-provisioner-operator
+    newTag: latest

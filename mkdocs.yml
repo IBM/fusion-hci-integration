@@ -1,0 +1,75 @@
+site_name: Fusion HCI Multi-Architecture Integration
+site_description: Integration of Fusion HCI x86 workers with s390x/LinuxONE OpenShift clusters
+site_author: OpenShift Integration Team
+site_url: https://pages.github.com/IBM/fusion-hci-integration/
+repo_url: https://github.com/IBM/fusion-hci-integration
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  palette:
+    primary: indigo
+    accent: indio
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+
+markdown_extensions:
+  - admonition
+  - codehilite
+  - toc:
+      permalink: true
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.details
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+nav:
+  - Home: index.md
+  - Getting Started:
+    - Prerequisites: prerequisites.md
+    - Setup Guide: getting-started.md
+    - Deployment Variants: deployment-variants.md
+  - Architecture:
+    - Solution Overview: architecture/solution-overview.md
+    - Architecture Overview: architecture/architecture-overview.md
+    - Network Design: architecture/network-design.md
+    - VM Provisioning: architecture/vm-provisioning.md
+    - Provider/Consumer Model: architecture/provider-consumer-model.md
+    - Provisioning Model: architecture/provisioning-model.md
+    - Setup Concept: architecture/setup-concept.md
+  - Configuration:
+    - HCI Cluster Setup: configuration/hci-cluster.md
+    - Main Cluster Setup: configuration/main-cluster.md
+    - Kustomize Overlays: configuration/kustomize-overlays.md
+  - Operations:
+    - Troubleshooting: operations/troubleshooting.md
+    - Monitoring: operations/monitoring.md
+  - Development:
+    - Developer Notes: development/developer-notes.md
+    - Build & Deploy Operators: development/operator-build-deploy.md
+    - Optimization & Go Migration: development/operator-optimization-and-go-migration.md
+    - Contributing: CONTRIBUTING.md
+    - Operator Roadmap: development/operator-roadmap.md
+
+plugins:
+  - search
+  - with-pdf:
+      output_path: pdf/project-documentation.pdf
+
+
+extra:
+  version:
+    default: 0.2.0
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/IBM/fusion-hci-integration
+
+# Made with Bob

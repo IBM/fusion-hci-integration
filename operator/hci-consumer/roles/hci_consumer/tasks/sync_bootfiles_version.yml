@@ -1,0 +1,213 @@
+---
+# sync_bootfiles_version.yml — BS-06b
+#
+# Called from main.yml on every reconcile once phase == Ready.
+# Manages desired-version.txt on the gateway and tracks confirmed
+# bootfiles state in HCIConsumer.status.bootfilesVersion.
+#
+# Flow:
+#   1. Read ClusterVersion.status.desired.version → _bfv_desired
+#   2. GET http://<gateway.external_ip>/rhcos/desired-version.txt
+#        → _bfv_gateway_desired (or absent)
+#      If absent or differs from _bfv_desired → write desired-version.txt
+#      via SSH using the provisioner keypair from HCIProvisioning.status.sshKeySecret
+#   3. GET http://<gateway.external_ip>/rhcos/current-version.txt
+#        → _bfv_gateway_current (or absent / non-200)
+#   4. Set _bfv_ready = (_bfv_gateway_current == _bfv_desired)
+#      Update status.bootfilesVersion when confirmed ready.
+#
+# Any HTTP failure (gateway unreachable, non-200) is treated as "not ready" —
+# safe default, scale-up gate remains closed for this reconcile.
+# SSH write failures are non-fatal — deferred to next reconcile.
+#
+# Produces fact:
+#   _bfv_ready   bool — true only when gateway current-version.txt == ClusterVersion
+#                       Used by scale_up.yml to gate worker VM creation.
+
+# ── Read desired cluster version ──────────────────────────────────────────────
+
+- name: "BS-06b | Fetch ClusterVersion CR"
+  kubernetes.core.k8s_info:
+    api_version: config.openshift.io/v1
+    kind: ClusterVersion
+    name: version
+  register: _bfv_cluster_version
+
+- name: "BS-06b | Set _bfv_ready=false and skip if ClusterVersion unavailable"
+  when: _bfv_cluster_version.resources | length == 0
+  ansible.builtin.set_fact:
+    _bfv_ready: false
+
+- name: "BS-06b | End sync if ClusterVersion unavailable"
+  when: _bfv_cluster_version.resources | length == 0
+  ansible.builtin.meta: end_play
+
+- name: "BS-06b | Extract desired cluster version (major.minor only)"
+  ansible.builtin.set_fact:
+    _bfv_desired: >-
+      {{
+        (_bfv_cluster_version.resources | first).status.desired.version
+        | regex_replace('^(\d+\.\d+)\..*$', '\1')
+      }}
+
+# ── Read desired-version.txt from gateway ─────────────────────────────────────
+
+- name: "BS-06b | GET desired-version.txt from gateway"
+  ansible.builtin.uri:
+    url: "http://{{ provider.gateway.ip }}/rhcos/desired-version.txt"
+    method: GET
+    return_content: true
+    status_code: [200, 404, -1]
+    timeout: 5
+  register: _bfv_desired_get
+  ignore_errors: true
+
+- name: "BS-06b | Parse gateway desired version"
+  ansible.builtin.set_fact:
+    _bfv_gateway_desired: >-
+      {{
+        _bfv_desired_get.content | trim
+        if (_bfv_desired_get.status | default(-1)) == 200
+        else ''
+      }}
+
+# ── Write desired-version.txt if drift or absent ──────────────────────────────
+
+- name: "BS-06b | Write desired-version.txt if drift detected"
+  when: _bfv_gateway_desired != _bfv_desired
+  block:
+
+    - name: "BS-06b | Fetch WorkerPoolProvisioning CR for SSH key Secret name"
+      kubernetes.core.k8s_info:
+        api_version: hci-integration.openshift.io/v1alpha1
+        kind: WorkerPoolProvisioning
+        name: "{{ ansible_operator_meta.name }}-provisioning"
+        namespace: "{{ ansible_operator_meta.namespace }}"
+      register: _bfv_provisioning_cr
+
+    - name: "BS-06b | Resolve SSH key Secret name"
+      ansible.builtin.set_fact:
+        _bfv_ssh_secret_name: >-
+          {{
+            (_bfv_provisioning_cr.resources | first).status.sshKeySecret | default('')
+            if _bfv_provisioning_cr.resources | length > 0
+            else ''
+          }}
+
+    - name: "BS-06b | Skip SSH write — provisioner Secret not available"
+      when: _bfv_ssh_secret_name == ''
+      ansible.builtin.debug:
+        msg: >-
+          BS-06b: HCIProvisioning.status.sshKeySecret not yet available —
+          desired-version.txt write deferred to next reconcile.
+
+    - name: "BS-06b | Read provisioner SSH Secret"
+      when: _bfv_ssh_secret_name != ''
+      kubernetes.core.k8s_info:
+        api_version: v1
+        kind: Secret
+        name: "{{ _bfv_ssh_secret_name }}"
+        namespace: "{{ ansible_operator_meta.namespace }}"
+      register: _bfv_ssh_secret
+
+    - name: "BS-06b | Write SSH key to temp file"
+      when:
+        - _bfv_ssh_secret_name != ''
+        - _bfv_ssh_secret.resources | length > 0
+      ansible.builtin.tempfile:
+        state: file
+        suffix: ".key"
+      register: _bfv_ssh_keyfile
+
+    - name: "BS-06b | Populate SSH key temp file"
+      when:
+        - _bfv_ssh_secret_name != ''
+        - _bfv_ssh_secret.resources | length > 0
+      ansible.builtin.copy:
+        content: >-
+          {{ (_bfv_ssh_secret.resources | first).data['id_ed25519'] | b64decode }}
+        dest: "{{ _bfv_ssh_keyfile.path }}"
+        mode: "0600"
+
+    - name: "BS-06b | Write desired-version.txt to gateway via SSH"
+      when:
+        - _bfv_ssh_secret_name != ''
+        - _bfv_ssh_secret.resources | length > 0
+      ansible.builtin.command:
+        argv:
+          - ssh
+          - "-i"
+          - "{{ _bfv_ssh_keyfile.path }}"
+          - "-o"
+          - "StrictHostKeyChecking=no"
+          - "-o"
+          - "UserKnownHostsFile=/dev/null"
+          - "-o"
+          - "BatchMode=yes"
+          - "core@{{ provider.gateway.ip }}"
+          - "echo '{{ _bfv_desired }}' > /tmp/desired-version.txt && sudo mv /tmp/desired-version.txt {{ gateway_http_root }}/rhcos/desired-version.txt && sudo chown nginx:nginx {{ gateway_http_root }}/rhcos/desired-version.txt && sudo chmod 644 {{ gateway_http_root }}/rhcos/desired-version.txt && sudo restorecon {{ gateway_http_root }}/rhcos/desired-version.txt"
+      register: _bfv_ssh_write
+      ignore_errors: true
+
+    - name: "BS-06b | Remove SSH key temp file"
+      when: _bfv_ssh_keyfile is defined and _bfv_ssh_keyfile.path is defined
+      ansible.builtin.file:
+        path: "{{ _bfv_ssh_keyfile.path }}"
+        state: absent
+
+    - name: "BS-06b | Log desired-version.txt write result"
+      ansible.builtin.debug:
+        msg: >-
+          desired-version.txt {{ _bfv_desired }}:
+          {{ 'written to gateway ' + provider.gateway.ip
+             if (_bfv_ssh_write is defined and _bfv_ssh_write is not skipped and _bfv_ssh_write is succeeded)
+             else 'write deferred — SSH unavailable or Secret not found' }}
+
+# ── Read current-version.txt from gateway — scale-up gate ────────────────────
+
+- name: "BS-06b | GET current-version.txt from gateway"
+  ansible.builtin.uri:
+    url: "http://{{ provider.gateway.ip }}/rhcos/current-version.txt"
+    method: GET
+    return_content: true
+    status_code: [200, 404, -1]
+    timeout: 5
+  register: _bfv_current_get
+  ignore_errors: true
+
+- name: "BS-06b | Parse gateway current version"
+  ansible.builtin.set_fact:
+    _bfv_gateway_current: >-
+      {{
+        _bfv_current_get.content | trim
+        if (_bfv_current_get.status | default(-1)) == 200
+        else ''
+      }}
+
+- name: "BS-06b | Evaluate scale-up gate"
+  ansible.builtin.set_fact:
+    _bfv_ready: >-
+      {{ _bfv_gateway_current == _bfv_desired and _bfv_gateway_current != '' }}
+
+- name: "BS-06b | Log bootfiles gate state"
+  ansible.builtin.debug:
+    msg: >-
+      Bootfiles gate:
+      desired={{ _bfv_desired }}
+      gateway_current={{ _bfv_gateway_current | default('(unavailable)') }}
+      ready={{ _bfv_ready }}
+      {{ '' if _bfv_ready else '— scale-up deferred until gateway syncs bootfiles' }}
+
+# ── Update HCIConsumer status.bootfilesVersion ────────────────────────────────
+# Only update when confirmed ready — avoids overwriting a known-good version
+# with an empty string during a transient gateway unreachability event.
+
+- name: "BS-06b | Update status.bootfilesVersion when confirmed"
+  when: _bfv_ready
+  operator_sdk.util.k8s_status:
+    api_version: hci-integration.openshift.io/v1alpha1
+    kind: WorkerPool
+    name: "{{ ansible_operator_meta.name }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+    status:
+      bootfilesVersion: "{{ _bfv_desired }}"

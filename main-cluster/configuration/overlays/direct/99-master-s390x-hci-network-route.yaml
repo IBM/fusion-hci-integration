@@ -1,0 +1,30 @@
+apiVersion: machineconfiguration.openshift.io/v1
+kind: MachineConfig
+metadata:
+  labels:
+    machineconfiguration.openshift.io/role: master
+  name: 99-master-s390x-hci-network-route
+spec:
+  config:
+    ignition:
+      version: 3.5.0
+    systemd:
+      units:
+        - name: hci-network-route.service
+          enabled: true
+          contents: |
+            [Unit]
+            Description=Add static route to HCI worker network
+            After=network-online.target ovs-configuration.service
+            Wants=network-online.target
+            Requires=ovs-configuration.service
+
+            [Service]
+            Type=oneshot
+            RemainAfterExit=yes
+            ExecStartPre=/bin/bash -c 'until ip link show br-ex; do sleep 1; done'
+            ExecStart=/bin/bash -c '/usr/sbin/ip route add 192.168.100.0/24 via 172.16.1.100 dev br-ex || true'
+
+            [Install]
+            WantedBy=multi-user.target
+

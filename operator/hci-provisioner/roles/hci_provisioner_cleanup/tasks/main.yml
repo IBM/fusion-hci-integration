@@ -1,0 +1,57 @@
+---
+# hci_provisioner_cleanup — finalizer role for HCIProvisioning CR deletion
+#
+# Called by the operator runner when the HCIProvisioning CR has the
+# hci-integration.openshift.io/provisioner-cleanup finalizer and is being
+# deleted (either directly or via ownerReference cascade from HCIConsumer).
+#
+# Responsibilities:
+#   1. Cancel any in-flight step Jobs (delete them)
+#   2. Allow the finalizer to release (the operator runner does this automatically
+#      once this role exits cleanly)
+#
+# NOTE: In most cases the CR is deleted via the ownerReference cascade from
+# HCIConsumer. The Jobs themselves also cascade (they are owned by HCIProvisioning).
+# This role is a safety net for manual deletion and for explicit teardown sequences.
+
+- name: "Log HCIProvisioning cleanup start"
+  ansible.builtin.debug:
+    msg: >-
+      Running HCIProvisioning cleanup for '{{ ansible_operator_meta.name }}'
+      in namespace '{{ ansible_operator_meta.namespace }}'
+
+# ── Cancel in-flight Jobs ─────────────────────────────────────────────────────
+# Jobs owned by this CR are GC'd automatically when the CR is deleted, but we
+# delete them explicitly here first so they stop consuming resources immediately.
+
+- name: "Cleanup: fetch owned Jobs"
+  kubernetes.core.k8s_info:
+    api_version: batch/v1
+    kind: Job
+    namespace: "{{ ansible_operator_meta.namespace }}"
+    label_selectors:
+      - "hci-integration.openshift.io/provisioning={{ ansible_operator_meta.name }}"
+  register: _owned_jobs
+
+- name: "Cleanup: delete in-flight Jobs"
+  kubernetes.core.k8s:
+    state: absent
+    api_version: batch/v1
+    kind: Job
+    name: "{{ item.metadata.name }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+    delete_options:
+      propagationPolicy: Background
+  loop: "{{ _owned_jobs.resources | default([]) }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+
+# TODO BS-04 teardown: if this is an explicit teardown (not a cascade delete),
+# the hci_provisioner role with mode=teardown handles infra removal via Jobs.
+# This cleanup role only cancels in-flight work — it does not remove HCI infra.
+
+- name: "Cleanup: log completion"
+  ansible.builtin.debug:
+    msg: >-
+      HCIProvisioning cleanup complete. {{ _owned_jobs.resources | default([]) | length }}
+      Job(s) deleted. Finalizer will be released.

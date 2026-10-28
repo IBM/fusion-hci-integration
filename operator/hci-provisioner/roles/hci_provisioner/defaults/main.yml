@@ -1,0 +1,120 @@
+---
+# Default variable values for the hci_provisioner role.
+#
+# These provide sensible fallbacks. All values are overridden by the actual
+# WorkerPoolProvisioning CR spec at runtime — the operator runner maps CR spec
+# fields to Ansible variables automatically (camelCase → snake_case, nested
+# objects preserved as dicts).
+#
+# Mapping: CR spec field                                  → Ansible variable
+#   spec.workerPoolRef                                    → worker_pool_ref
+#   spec.mode                                             → mode
+#   spec.providerAccess.apiEndpoint                       → provider_access.api_endpoint
+#   spec.providerAccess.namespace                         → provider_access.namespace
+#   spec.providerAccess.credentialsSecret                 → provider_access.credentials_secret
+#   spec.infrastructure.gateway.ip                        → infrastructure.gateway.ip
+#   spec.infrastructure.gateway.prefixLength              → infrastructure.gateway.prefix_length
+#   spec.infrastructure.gateway.defaultRouter             → infrastructure.gateway.default_router
+#   spec.infrastructure.gateway.resources.*               → infrastructure.gateway.resources.*
+#   spec.infrastructure.network.machineConfigPool         → infrastructure.network.machine_config_pool
+#   spec.infrastructure.network.topology                  → infrastructure.network.topology
+#   spec.infrastructure.network.macPrefix                 → infrastructure.network.mac_prefix
+#   spec.infrastructure.network.internalSubnet            → infrastructure.network.internal_subnet
+#   spec.infrastructure.network.dnsServer                 → infrastructure.network.dns_server
+#   spec.infrastructure.network.internalNetwork           → infrastructure.network.internal_network
+#   spec.infrastructure.network.internalGateway           → infrastructure.network.internal_gateway
+#   spec.infrastructure.capacity.maxPoolSize              → infrastructure.capacity.max_pool_size
+
+worker_pool_ref: ""
+mode: "bootstrap"          # bootstrap | teardown
+
+provider_access:
+  api_endpoint: ""
+  namespace: ""
+  credentials_secret: "hci-provisioner-credentials"
+
+infrastructure:
+  gateway:
+    ip: ""
+    prefix_length: 24
+    default_router: "172.16.0.1"
+    # ssh_authorized_key is NOT a CR field — read at reconcile time from
+    # the 99-worker-ssh MachineConfig on the local (consumer) cluster.
+    resources:
+      cpu: 2
+      memory: "4Gi"
+      storage: "30Gi"
+      storage_class: "ocs-storagecluster-ceph-rbd-virtualization"
+      data_source_name: "centos-stream9"
+      data_source_namespace: "openshift-virtualization-os-images"
+  network:
+    machine_config_pool: "hci-vm"
+    topology: "direct"
+    mac_prefix: "52:54:00"
+    internal_subnet: "192.168.100.0/24"
+    dns_server: ""
+    internal_network: ""
+    internal_gateway: ""
+  capacity:
+    max_pool_size: 10
+
+# BS-06a: generateName prefix for the operator-generated provisioner SSH keypair
+# Secret. Kubernetes appends a random suffix — the actual name is stored in
+# WorkerPoolProvisioning.status.sshKeySecret. Do not change this value on
+# existing deployments; changing it does not rename existing Secrets.
+provisioner_ssh_key_secret_prefix: "hci-provisioner-ssh-key-"
+
+# BS-04: how long to wait for SSH reachability on infrastructure.gateway.ip:22
+# before declaring the GatewayVM step Failed.
+gateway_vm_timeout_seconds: 600
+
+# BS-04: well-known paths on the gateway VM for PXE boot infrastructure.
+# These match the standard system locations for dnsmasq-tftp and nginx on
+# CentOS Stream 9. Only change these if the gateway image uses non-standard paths.
+gateway_tftp_root: "/var/lib/tftpboot"
+gateway_http_root: "/var/www/html"
+
+# Bootstrap step definitions in dependency order.
+# The diff_steps task uses this to drive the dependency graph.
+#
+# Each entry:
+#   name        — matches status.steps[].name in the CRD
+#   depends_on  — list of step names that must be Complete before this starts
+#                 (empty list = can start immediately / run in parallel)
+#
+# True hard dependencies:
+#   UDN           → none
+#   GatewayVM     → none  (KubeVirt VM object creation does not require the NAD to
+#                          exist; the NAD is resolved at VMI scheduling time.)
+#   Credentials   → none
+#   MachineConfig → none (pure consumer-side, independent of provider steps)
+#   Ignition      → GatewayVM (SSH to gateway required to distribute the file)
+bootstrap_steps:
+  - name: UDN
+    depends_on: []
+  - name: Credentials
+    depends_on: []
+  - name: GatewayVM
+    depends_on: []
+  - name: Ignition
+    depends_on:
+      - GatewayVM
+
+# Teardown dependency order:
+#   GatewayVM and Workers run in parallel (no deps between them).
+#   UDN must wait for both — worker VMs hold UDN attachments; the UDN controller
+#   finalizer will not complete deletion while any VMI is still attached.
+#   Ignition/Credentials/MachineConfig are noop (auto-completed on init).
+teardown_steps:
+  - name: Ignition
+    depends_on: []
+  - name: Credentials
+    depends_on: []
+  - name: GatewayVM
+    depends_on: []
+  - name: Workers
+    depends_on: []
+  - name: UDN
+    depends_on:
+      - GatewayVM
+      - Workers

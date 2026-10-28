@@ -1,0 +1,116 @@
+---
+# step_udn.yml — BS-03 bootstrap path
+#
+# Called from advance_steps.yml when UDN step is Pending and mode==bootstrap.
+#
+# Responsibilities:
+#   1. Write a temp kubeconfig from the provisioner credentials Secret
+#   2. Pre-flight: verify ClusterUserDefinedNetwork 'router-external-network' exists
+#      (cluster-admin resource — operator does not create it, only validates)
+#   3. Apply UserDefinedNetwork 'router-internal-network' (Layer2, no IPAM)
+#   4. Patch UDN step → Complete immediately (resource applied = done)
+#
+# Note: namespace label hci-gateway-enabled=true is NOT checked here — the SA
+# does not have namespace get permissions (cluster-scoped, needs ClusterRole).
+# If the label is missing the external NAD won't appear and GatewayVM will fail
+# to start — which is a sufficient error surface for that misconfiguration.
+#
+# Teardown: step_udn_teardown.yml
+
+# ── Write HCI kubeconfig from credentials Secret ──────────────────────────────
+
+- name: "BS-03 | Read provisioner credentials Secret"
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: "{{ provider_access.credentials_secret }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+  register: _udn_prov_secret
+
+- name: "BS-03 | Write HCI kubeconfig to temp file"
+  ansible.builtin.tempfile:
+    state: file
+    suffix: ".kubeconfig"
+  register: _udn_kubeconfig_file
+
+- name: "BS-03 | Populate HCI kubeconfig temp file"
+  ansible.builtin.copy:
+    content: >-
+      {{
+        (_udn_prov_secret.resources | first).data.kubeconfig
+        | b64decode
+      }}
+    dest: "{{ _udn_kubeconfig_file.path }}"
+    mode: "0600"
+
+# ── Pre-flight: ClusterUserDefinedNetwork must exist ─────────────────────────
+# The CUDN is a cluster-admin resource that must be applied once outside this
+# operator (hci-cluster/cluster-network-setup.yaml).
+# Its controller auto-creates the router-external-network NAD in every namespace
+# labelled hci-gateway-enabled=true.
+
+- name: "BS-03 | Check ClusterUserDefinedNetwork 'router-external-network' exists"
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ _udn_kubeconfig_file.path }}"
+    api_version: k8s.ovn.org/v1
+    kind: ClusterUserDefinedNetwork
+    name: router-external-network
+  register: _udn_cudn_check
+# provider_access.namespace used for UDN creation below
+
+- name: "BS-03 | Abort if ClusterUserDefinedNetwork is missing"
+  when: _udn_cudn_check.resources | length == 0
+  ansible.builtin.fail:
+    msg: >-
+      ClusterUserDefinedNetwork 'router-external-network' does not exist on HCI cluster.
+      Apply hci-cluster/cluster-network-setup.yaml as cluster-admin first.
+
+# ── Apply UserDefinedNetwork ──────────────────────────────────────────────────
+# Layer2 internal network for worker VMs. No IPAM — static IPs assigned per VM
+# by the hci-consumer operator using the mac_prefix convention.
+
+- name: "BS-03 | Apply UserDefinedNetwork 'router-internal-network'"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ _udn_kubeconfig_file.path }}"
+    state: present
+    definition:
+      apiVersion: k8s.ovn.org/v1
+      kind: UserDefinedNetwork
+      metadata:
+        name: router-internal-network
+        namespace: "{{ provider_access.namespace }}"
+        labels:
+          hci-integration.openshift.io/managed-by: hci-provisioner-operator
+          hci-integration.openshift.io/consumer: "{{ worker_pool_ref }}"
+      spec:
+        topology: Layer2
+        layer2:
+          role: Secondary
+          ipam:
+            mode: Disabled
+
+# ── Clean up kubeconfig temp file ─────────────────────────────────────────────
+
+- name: "BS-03 | Remove HCI kubeconfig temp file"
+  ansible.builtin.file:
+    path: "{{ _udn_kubeconfig_file.path }}"
+    state: absent
+
+# ── Signal result to advance_steps.yml ───────────────────────────────────────
+# Do NOT write to the CR here. advance_steps.yml owns all status writes.
+# The proxy cache means any k8s_info re-fetch in this task returns the
+# pre-reconcile snapshot, causing concurrent step writes to clobber each other.
+# Instead, set a fact that advance_steps.yml merges into the final steps write.
+
+- name: "BS-03 | Set step result fact → Complete"
+  ansible.builtin.set_fact:
+    _step_result_udn:
+      status: Complete
+      lastTransitionTime: "{{ ansible_date_time.iso8601 }}"
+      message: "UserDefinedNetwork 'router-internal-network' applied in namespace {{ provider_access.namespace }}."
+
+- name: "BS-03 | Log Complete"
+  ansible.builtin.debug:
+    msg: >-
+      UDN step Complete.
+      UserDefinedNetwork 'router-internal-network' applied in {{ provider_access.namespace }}.

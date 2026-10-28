@@ -1,0 +1,63 @@
+---
+# BuildConfig for hci-consumer-operator
+#
+# Strategy: docker — uses operator/hci-consumer/Dockerfile.
+# Source:   binary — `make build-consumer` uploads the directory via
+#           `oc start-build --from-dir`.
+# Output:   ImageStreamTag in OPERATOR_NAMESPACE.  The Deployment references
+#           the internal registry URL directly.
+#
+# Build runs on a cluster node → correct architecture (s390x on LinuxONE).
+# Apply with: make apply-buildconfigs
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: hci-consumer-operator
+  namespace: hci-node-manager          # replaced by make apply-buildconfigs
+  labels:
+    app.kubernetes.io/name: hci-consumer-operator
+    app.kubernetes.io/part-of: hci-integration
+spec:
+  output:
+    to:
+      kind: ImageStreamTag
+      name: hci-consumer-operator:latest
+  source:
+    type: Binary
+    binary: {}
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: Dockerfile
+  triggers: []
+---
+# BuildConfig for hci-provisioner-operator
+#
+# Strategy: docker — uses operator/hci-provisioner/Dockerfile.
+# Source:   binary — `make build-provisioner` uploads the directory via
+#           `oc start-build --from-dir`.
+# Output:   ImageStreamTag in OPERATOR_NAMESPACE.
+#
+# Build runs on a cluster node → correct architecture (s390x on LinuxONE).
+# Apply with: make apply-buildconfigs
+apiVersion: build.openshift.io/v1
+kind: BuildConfig
+metadata:
+  name: hci-provisioner-operator
+  namespace: hci-node-manager          # replaced by make apply-buildconfigs
+  labels:
+    app.kubernetes.io/name: hci-provisioner-operator
+    app.kubernetes.io/part-of: hci-integration
+spec:
+  output:
+    to:
+      kind: ImageStreamTag
+      name: hci-provisioner-operator:latest
+  source:
+    type: Binary
+    binary: {}
+  strategy:
+    type: Docker
+    dockerStrategy:
+      dockerfilePath: Dockerfile
+  triggers: []

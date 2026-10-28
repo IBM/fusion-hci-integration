@@ -1,0 +1,21 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Internal OpenShift image registry overlay.
+# Used when both build and deploy happen on the same cluster.
+# The image references point to the internal registry service hostname,
+# which is reachable from all pods without a pull secret.
+#
+# Image references are managed by `make deploy` via `kustomize edit set image`.
+# Do not edit the images: block by hand — run make deploy instead.
+
+resources:
+  - ../../base
+
+images:
+  - name: hci-consumer-operator
+    newName: image-registry.openshift-image-registry.svc:5000/hci-node-manager/hci-consumer-operator
+    newTag: latest
+  - name: hci-provisioner-operator
+    newName: image-registry.openshift-image-registry.svc:5000/hci-node-manager/hci-provisioner-operator
+    newTag: latest

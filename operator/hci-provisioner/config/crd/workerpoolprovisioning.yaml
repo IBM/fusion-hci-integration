@@ -1,0 +1,335 @@
+---
+# WorkerPoolProvisioning Custom Resource Definition
+#
+# Installed on the consumer (LO) cluster alongside WorkerPool.
+# Represents the execution state of a single bootstrap or teardown run.
+#
+# Created by the WorkerPool operator when bootstrap or teardown is needed.
+# Owned by WorkerPool via ownerReference — Kubernetes GC cascades automatically.
+#
+# The hci-provisioner operator watches this resource and drives each step
+# to completion, then patches WorkerPool.status.phase.
+#
+# Spec structure:
+#   workerPoolRef   — back-pointer to the owning WorkerPool CR
+#   mode            — bootstrap | teardown
+#   providerAccess  — connection details for the provider cluster
+#   infrastructure  — everything needed to render and manage provider infra
+#                     (merged from WorkerPool.spec.provider + spec.consumer
+#                      at CR creation time by the hci-consumer operator)
+
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: workerpoolprovisionings.hci-integration.openshift.io
+  annotations:
+    description: >-
+      Execution state of a single WorkerPool bootstrap or teardown run.
+      Created by the hci-consumer operator; reconciled by the hci-provisioner
+      operator. Owned by WorkerPool via ownerReference.
+spec:
+  group: hci-integration.openshift.io
+  names:
+    kind: WorkerPoolProvisioning
+    listKind: WorkerPoolProvisioningList
+    plural: workerpoolprovisionings
+    singular: workerpoolprovisioning
+    shortNames:
+      - wpp
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Mode
+          type: string
+          jsonPath: .spec.mode
+          description: bootstrap or teardown
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+          description: Current execution phase
+        - name: Pool
+          type: string
+          jsonPath: .spec.workerPoolRef
+          description: Owning WorkerPool name
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+
+            spec:
+              type: object
+              required:
+                - workerPoolRef
+                - mode
+                - providerAccess
+                - infrastructure
+              properties:
+
+                workerPoolRef:
+                  type: string
+                  description: >-
+                    Name of the WorkerPool CR that owns this provisioning run.
+                    Used by the operator to patch WorkerPool.status.phase on
+                    completion or failure.
+                  example: "hci-workers"
+
+                mode:
+                  type: string
+                  description: >-
+                    Whether this run creates (bootstrap) or removes (teardown)
+                    the infrastructure for the worker pool relationship.
+                  enum:
+                    - bootstrap
+                    - teardown
+
+                # ── Provider access ──────────────────────────────────────────
+                # Copied from WorkerPool.spec.provider at CR creation time.
+                # Contains only what is needed to authenticate to the provider cluster.
+
+                providerAccess:
+                  type: object
+                  required:
+                    - apiEndpoint
+                    - namespace
+                    - credentialsSecret
+                  description: >-
+                    Provider cluster connection details. Copied from
+                    WorkerPool.spec.provider at CR creation time.
+                  properties:
+
+                    apiEndpoint:
+                      type: string
+                      example: "https://api.hci.example.com:6443"
+
+                    namespace:
+                      type: string
+                      example: "main-cluster-workers"
+
+                    credentialsSecret:
+                      type: string
+                      description: >-
+                        Name of the Secret containing the provider cluster kubeconfig.
+                      example: "hci-provisioner-credentials"
+
+                # ── Infrastructure ───────────────────────────────────────────
+                # Merged from WorkerPool.spec.provider + spec.consumer at CR
+                # creation time. Contains everything the provisioner needs to
+                # render gateway cloud-init and manage provider infrastructure.
+
+                infrastructure:
+                  type: object
+                  required:
+                    - gateway
+                    - network
+                    - capacity
+                  description: >-
+                    All infrastructure parameters needed by the provisioner.
+                    Merged from WorkerPool spec at CR creation time.
+                  properties:
+
+                    gateway:
+                      type: object
+                      required:
+                        - ip
+                        - prefixLength
+                        - defaultRouter
+                      properties:
+
+                        ip:
+                          type: string
+                          description: >-
+                            External interface IP of the gateway VM.
+                            Used as reachability probe target and NAT address.
+                          example: "172.16.1.100"
+
+                        prefixLength:
+                          type: integer
+                          minimum: 1
+                          maximum: 32
+                          example: 16
+
+                        defaultRouter:
+                          type: string
+                          example: "172.16.0.1"
+
+                        resources:
+                          type: object
+                          properties:
+                            cpu:
+                              type: integer
+                              minimum: 1
+                              default: 2
+                            memory:
+                              type: string
+                              default: "4Gi"
+                            storage:
+                              type: string
+                              default: "30Gi"
+
+                    network:
+                      type: object
+                      required:
+                        - topology
+                        - macPrefix
+                        - internalSubnet
+                        - dnsServer
+                      description: >-
+                        Merged network parameters from both provider and consumer.
+                      x-kubernetes-validations:
+                        - rule: >-
+                            self.topology != 'mediated' ||
+                            (has(self.internalNetwork) && has(self.internalGateway))
+                          message: >-
+                            infrastructure.network.internalNetwork and internalGateway
+                            are required when topology is mediated
+                      properties:
+
+                        machineConfigPool:
+                          type: string
+                          default: "hci-vm"
+                          description: >-
+                            Name of the MachineConfigPool to validate on the consumer
+                            cluster. Copied from WorkerPool.spec.consumer.machineConfigPool
+                            at CR creation time. The provisioner checks this pool exists
+                            and is not Degraded before placing the ignition file on the
+                            gateway.
+
+                        topology:
+                          type: string
+                          enum:
+                            - direct
+                            - mediated
+                          default: direct
+
+                        macPrefix:
+                          type: string
+                          default: "52:54:00"
+
+                        internalSubnet:
+                          type: string
+                          example: "192.168.100.0/24"
+
+                        dnsServer:
+                          type: string
+                          description: >-
+                            DNS server for consumer cluster-internal name resolution.
+                          example: "172.16.0.1"
+
+                        internalNetwork:
+                          type: string
+                          description: Consumer-side network range (mediated topology).
+                          example: "10.0.0.0/24"
+
+                        internalGateway:
+                          type: string
+                          description: Consumer-side gateway (mediated topology).
+                          example: "172.16.0.1"
+
+                    capacity:
+                      type: object
+                      required:
+                        - maxPoolSize
+                      properties:
+
+                        maxPoolSize:
+                          type: integer
+                          minimum: 1
+                          default: 10
+                          description: >-
+                            Maximum number of worker VMs on the provider.
+                            Copied from WorkerPool.spec.provider.maxPoolSize.
+
+            status:
+              type: object
+              description: >-
+                Current execution state. Managed exclusively by the
+                hci-provisioner operator — do not edit manually.
+              properties:
+
+                sshKeySecret:
+                  type: string
+                  description: >-
+                    Name of the operator-generated Secret holding the
+                    provisioner SSH keypair (generateName: hci-provisioner-ssh-key-).
+                    Written by the operator on first reconcile; read by BS-04
+                    (cloud-init injection) and BS-06a (file distribution).
+                    Do not edit manually — the operator owns this Secret.
+
+                phase:
+                  type: string
+                  description: Overall phase of this provisioning run.
+                  enum:
+                    - Pending
+                    - InProgress
+                    - Complete
+                    - Failed
+
+                steps:
+                  type: array
+                  description: >-
+                    Ordered list of provisioning steps and their current status.
+                  items:
+                    type: object
+                    required:
+                      - name
+                      - status
+                    properties:
+                      name:
+                        type: string
+                        description: Step identifier.
+                        enum:
+                          - GatewayVM
+                          - UDN
+                          - MachineConfig
+                          - Ignition
+                          - Bootfiles
+                          - Credentials
+                          - Workers
+                      status:
+                        type: string
+                        description: Current execution state of this step.
+                        enum:
+                          - Pending
+                          - InProgress
+                          - Complete
+                          - Failed
+                        default: Pending
+                      jobName:
+                        type: string
+                        description: Name of the Kubernetes Job executing this step.
+                      message:
+                        type: string
+                        description: Human-readable status detail.
+                      lastTransitionTime:
+                        type: string
+                        format: date-time
+                        description: When this step last changed state.
+
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - type
+                      - status
+                    properties:
+                      type:
+                        type: string
+                      status:
+                        type: string
+                        enum: ["True", "False", "Unknown"]
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time

@@ -12,6 +12,8 @@ local-*.yaml
 site/
 **/site/
 workspace/
+wiki/
+ops/
 *.bkp
 *.dtmp
 

@@ -1,0 +1,197 @@
+---
+# step_ignition.yml — BS-06a bootstrap path
+#
+# Called from advance_steps.yml when the Ignition step is Pending and
+# GatewayVM is Complete (SSH reachable).
+#
+# Responsibilities:
+#   1. Read the base worker ignition stub from worker-user-data-managed Secret
+#   2. Rewrite the MCS endpoint (api-int.<domain>:22623) to route through
+#      the gateway internal IP — workers on the HCI internal network cannot
+#      reach api-int directly; they reach MCS via the gateway NAT
+#   3. Write worker-hci.ign to a temp file
+#   4. SCP the file to the gateway HTTP server document root using the
+#      operator-generated provisioner SSH key (hci-provisioner-ssh-key-*)
+#   5. Patch Ignition step → Complete
+#
+# The ignition file is a small redirect stub pointing at the MCS endpoint.
+# It is version-independent — it does not change across OCP upgrades.
+# This step runs once at bootstrap and is never re-triggered.
+#
+# Preconditions (guaranteed by advance_steps.yml dependency graph):
+#   - GatewayVM step is Complete (SSH port :22 confirmed open)
+#   - _provisioner_ssh_secret_name fact is set (by ensure_provisioner_ssh_key.yml)
+
+# ── Read cluster infrastructure CR for api-int hostname ──────────────────────
+# Workers reach the MCS via api-int directly (gateway NAT provides outbound
+# connectivity). The api-int hostname is read from infrastructure/cluster.
+
+- name: "BS-06a | Fetch infrastructure CR for apiServerInternalURI"
+  kubernetes.core.k8s_info:
+    api_version: config.openshift.io/v1
+    kind: Infrastructure
+    name: cluster
+  register: _ign_infra_cr
+
+- name: "BS-06a | Abort if Infrastructure CR not found"
+  when: _ign_infra_cr.resources | length == 0
+  ansible.builtin.fail:
+    msg: >-
+      config.openshift.io/v1 Infrastructure/cluster not found.
+      Cannot determine apiServerInternalURI for worker-hci.ign.
+
+- name: "BS-06a | Extract api-int hostname"
+  ansible.builtin.set_fact:
+    _ign_api_int_host: >-
+      {{
+        (_ign_infra_cr.resources | first).status.apiServerInternalURI
+        | regex_replace('^https?://', '')
+        | regex_replace(':.*$', '')
+      }}
+
+# ── Read base worker ignition stub from LO ────────────────────────────────────
+
+- name: "BS-06a | Fetch worker-user-data-managed Secret"
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: worker-user-data-managed
+    namespace: openshift-machine-api
+  register: _ign_worker_secret
+
+- name: "BS-06a | Abort if worker-user-data-managed Secret not found"
+  when: _ign_worker_secret.resources | length == 0
+  ansible.builtin.fail:
+    msg: >-
+      Secret 'worker-user-data-managed' not found in namespace
+      'openshift-machine-api'. Cannot generate worker-hci.ign.
+
+- name: "BS-06a | Decode base ignition content"
+  # Force the decoded string through | from_json so _ign_base_content is always
+  # a dict, regardless of whether the Ansible 2.9 template engine auto-parses it.
+  ansible.builtin.set_fact:
+    _ign_base_content: >-
+      {{ (_ign_worker_secret.resources | first).data.userData | b64decode | from_json }}
+
+# ── Rewrite MCS config path worker → <machineConfigPool> ─────────────────────
+#   Replace the full merge[0].source URL with api-int host + /config/<pool>
+# Workers fetch this stub on first boot, then contact MCS at /config/<pool>
+# to get the rendered MachineConfig with correct kernel arguments for the pool.
+# Pool name comes from infrastructure.network.machine_config_pool (passed from
+# WorkerPool.spec.consumer.machineConfigPool, default "hci-vm").
+#
+# Example (default pool name):
+#   https://api-int.cluster.example.com:22623/config/worker
+#   → https://api-int.cluster.example.com:22623/config/hci-vm
+
+- name: "BS-06a | Set new MCS source URL (api-int host + /config/<machineConfigPool>)"
+  ansible.builtin.set_fact:
+    _ign_mcs_new_url: "https://{{ _ign_api_int_host }}:22623/config/{{ infrastructure.network.machine_config_pool }}"
+
+- name: "BS-06a | Rewrite merge source to hci-vm config path"
+  # _ign_base_content is already a dict — no | from_json needed.
+  # Build the patched object and serialise to JSON string for SCP.
+  ansible.builtin.set_fact:
+    _ign_hci_content: >-
+      {{
+        _ign_base_content
+        | combine({
+            'ignition': _ign_base_content.ignition | combine({
+              'config': _ign_base_content.ignition.config | combine({
+                'merge': [
+                  _ign_base_content.ignition.config.merge[0]
+                  | combine({'source': _ign_mcs_new_url})
+                ]
+              })
+            })
+          }, recursive=True)
+        | to_json
+      }}
+
+# ── Write ignition file to temp location and SCP to gateway ──────────────────
+
+- name: "BS-06a | Write worker-hci.ign to temp file"
+  ansible.builtin.tempfile:
+    state: file
+    suffix: ".ign"
+  register: _ign_tmpfile
+
+- name: "BS-06a | Populate temp ignition file"
+  ansible.builtin.copy:
+    content: "{{ _ign_hci_content }}"
+    dest: "{{ _ign_tmpfile.path }}"
+    mode: "0600"
+
+- name: "BS-06a | Read provisioner SSH private key"
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: "{{ _provisioner_ssh_secret_name }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+  register: _ign_ssh_secret
+
+- name: "BS-06a | Write provisioner SSH private key to temp file"
+  ansible.builtin.tempfile:
+    state: file
+    suffix: ".key"
+  register: _ign_ssh_keyfile
+
+- name: "BS-06a | Populate SSH private key temp file"
+  ansible.builtin.copy:
+    content: >-
+      {{ (_ign_ssh_secret.resources | first).data['id_ed25519'] | b64decode }}
+    dest: "{{ _ign_ssh_keyfile.path }}"
+    mode: "0600"
+
+- name: "BS-06a | SCP worker-hci.ign to gateway temp location"
+  ansible.builtin.command:
+    cmd: >-
+      scp
+      -i {{ _ign_ssh_keyfile.path }}
+      -o StrictHostKeyChecking=no
+      -o UserKnownHostsFile=/dev/null
+      -o BatchMode=yes
+      {{ _ign_tmpfile.path }}
+      core@{{ infrastructure.gateway.ip }}:/tmp/worker-hci.ign
+  register: _ign_scp_result
+
+- name: "BS-06a | Move worker-hci.ign into HTTP root via sudo"
+  ansible.builtin.command:
+    cmd: >-
+      ssh
+      -i {{ _ign_ssh_keyfile.path }}
+      -o StrictHostKeyChecking=no
+      -o UserKnownHostsFile=/dev/null
+      -o BatchMode=yes
+      core@{{ infrastructure.gateway.ip }}
+      sudo mv /tmp/worker-hci.ign {{ gateway_http_root }}/rhcos/worker-hci.ign
+        && sudo chown nginx:nginx {{ gateway_http_root }}/rhcos/worker-hci.ign
+        && sudo chmod 644 {{ gateway_http_root }}/rhcos/worker-hci.ign
+        && sudo restorecon {{ gateway_http_root }}/rhcos/worker-hci.ign
+
+# ── Clean up temp files ───────────────────────────────────────────────────────
+
+- name: "BS-06a | Remove ignition temp file"
+  ansible.builtin.file:
+    path: "{{ _ign_tmpfile.path }}"
+    state: absent
+
+- name: "BS-06a | Remove SSH key temp file"
+  ansible.builtin.file:
+    path: "{{ _ign_ssh_keyfile.path }}"
+    state: absent
+
+# ── Signal result to advance_steps.yml ───────────────────────────────────────
+
+- name: "BS-06a | Set step result fact → Complete"
+  ansible.builtin.set_fact:
+    _step_result_ignition:
+      status: Complete
+      lastTransitionTime: "{{ ansible_date_time.iso8601 }}"
+      message: "worker-hci.ign distributed to gateway {{ infrastructure.gateway.ip }}:{{ gateway_http_root }}/rhcos/"
+
+- name: "BS-06a | Log Ignition step complete"
+  ansible.builtin.debug:
+    msg: >-
+      Ignition step Complete.
+      worker-hci.ign distributed to core@{{ infrastructure.gateway.ip }}:{{ gateway_http_root }}/rhcos/worker-hci.ign

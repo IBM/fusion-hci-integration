@@ -1,0 +1,65 @@
+---
+# LO-06: Scale-down — remove VMs selected by diff_desired_actual.yml.
+#
+# Input  : vms_to_delete  — safe candidates capped at surplus, highest index first
+#          vms_blocked    — truly blocked + safe-but-not-needed-this-reconcile
+#          hci_kubeconfig_file.path  (from observe_world.yml)
+#
+# The diff phase has already done all the decision work:
+#   • only VMs whose node is absent or empty are in vms_to_delete
+#   • the list is capped at the exact surplus so we never over-delete
+#   • vms_blocked covers both truly-blocked (LOOps not done) and
+#     safe-but-not-needed (count already satisfied)
+
+# ── Act on selected deletions ─────────────────────────────────────────────────
+
+- name: "Scale-down | No VMs to delete"
+  when: vms_to_delete | length == 0
+  ansible.builtin.debug:
+    msg: "Scale-down: nothing to do (surplus={{ surplus }})"
+
+- name: "Scale-down | Remove selected VMs"
+  when: vms_to_delete | length > 0
+  ansible.builtin.include_tasks: remove_worker_vm.yml
+  loop: "{{ vms_to_delete }}"
+  loop_control:
+    loop_var: vm_name_to_remove
+
+# ── Report blocked VMs in CR status ──────────────────────────────────────────
+#
+# After the act phase the remaining surplus is: surplus - vms_to_delete | length.
+# If that is still > 0, more drains are needed — keep ScaleDownBlocked=True.
+# Only clear when remaining surplus reaches 0, i.e. the pool is at target size.
+
+- name: "Scale-down | Set ScaleDownBlocked (drain still needed for remaining surplus)"
+  when: ((surplus | int) - (vms_to_delete | length)) > 0 and (vms_blocked | length) > 0
+  operator_sdk.util.k8s_status:
+    api_version: hci-integration.openshift.io/v1alpha1
+    kind: WorkerPool
+    name: "{{ ansible_operator_meta.name }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+    status:
+      conditions:
+        - type: "ScaleDownBlocked"
+          status: "True"
+          reason: "NoDrainedNode"
+          message: >-
+            Scale-down in progress (surplus={{ surplus }}, deleting={{ vms_to_delete | length }},
+            still needed={{ (surplus | int) - (vms_to_delete | length) }}).
+            Drain the next candidate: oc adm cordon <node> &&
+            oc adm drain <node> --ignore-daemonsets --delete-emptydir-data
+            Waiting on: {{ vms_blocked | join(', ') }}
+
+- name: "Scale-down | Clear ScaleDownBlocked (pool reaches target size this reconcile)"
+  when: ((surplus | int) - (vms_to_delete | length)) == 0
+  operator_sdk.util.k8s_status:
+    api_version: hci-integration.openshift.io/v1alpha1
+    kind: WorkerPool
+    name: "{{ ansible_operator_meta.name }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+    status:
+      conditions:
+        - type: "ScaleDownBlocked"
+          status: "False"
+          reason: "NoPendingDrain"
+          message: "Scale-down complete — pool is at target size."

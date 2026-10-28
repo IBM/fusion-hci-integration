@@ -1,0 +1,87 @@
+---
+# step_udn_teardown.yml — BS-03 teardown path
+#
+# Called from advance_steps.yml when UDN step is Pending and mode==teardown.
+#
+# Deletes the UserDefinedNetwork 'router-internal-network' from the HCI namespace.
+# The router-external-network NAD is owned by the ClusterUserDefinedNetwork controller
+# and is removed automatically when the namespace label is removed — that is a
+# cluster-admin action outside this operator's scope.
+#
+# Idempotent: kubernetes.core.k8s state: absent is a no-op if already gone.
+
+# ── Write HCI kubeconfig from credentials Secret ──────────────────────────────
+
+- name: "BS-03 teardown | Read provisioner credentials Secret"
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: "{{ provider_access.credentials_secret }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+  register: _udn_td_prov_secret
+
+- name: "BS-03 teardown | Write HCI kubeconfig to temp file"
+  ansible.builtin.tempfile:
+    state: file
+    suffix: ".kubeconfig"
+  register: _udn_td_kubeconfig_file
+
+- name: "BS-03 teardown | Populate HCI kubeconfig temp file"
+  ansible.builtin.copy:
+    content: >-
+      {{
+        (_udn_td_prov_secret.resources | first).data.kubeconfig
+        | b64decode
+      }}
+    dest: "{{ _udn_td_kubeconfig_file.path }}"
+    mode: "0600"
+
+# ── Delete UserDefinedNetwork ─────────────────────────────────────────────────
+
+- name: "BS-03 teardown | Delete UserDefinedNetwork 'router-internal-network'"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ _udn_td_kubeconfig_file.path }}"
+    state: absent
+    api_version: k8s.ovn.org/v1
+    kind: UserDefinedNetwork
+    name: router-internal-network
+    namespace: "{{ provider_access.namespace }}"
+
+# ── Verify absent ─────────────────────────────────────────────────────────────
+
+- name: "BS-03 teardown | Verify UserDefinedNetwork is absent"
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ _udn_td_kubeconfig_file.path }}"
+    api_version: k8s.ovn.org/v1
+    kind: UserDefinedNetwork
+    name: router-internal-network
+    namespace: "{{ provider_access.namespace }}"
+  register: _udn_td_check
+
+# ── Clean up kubeconfig temp file ─────────────────────────────────────────────
+
+- name: "BS-03 teardown | Remove HCI kubeconfig temp file"
+  ansible.builtin.file:
+    path: "{{ _udn_td_kubeconfig_file.path }}"
+    state: absent
+
+# ── Signal result to advance_steps.yml ───────────────────────────────────────
+
+- name: "BS-03 teardown | Set step result fact"
+  ansible.builtin.set_fact:
+    _udn_td_gone: "{{ _udn_td_check.resources | length == 0 }}"
+    _step_result_udn:
+      status: "{{ 'Complete' if _udn_td_check.resources | length == 0 else 'InProgress' }}"
+      lastTransitionTime: "{{ ansible_date_time.iso8601 }}"
+      message: >-
+        {{
+          "UserDefinedNetwork 'router-internal-network' removed from " + provider_access.namespace + '.'
+          if _udn_td_check.resources | length == 0 else
+          "Deleting UserDefinedNetwork 'router-internal-network' (terminating)."
+        }}
+
+- name: "BS-03 teardown | Log outcome"
+  ansible.builtin.debug:
+    msg: >-
+      UDN teardown: {{ 'Complete — UserDefinedNetwork removed.' if _udn_td_gone
+      else 'InProgress — resource still terminating. Will re-check next reconcile.' }}

@@ -1,0 +1,66 @@
+---
+# Default variable values for the hci_consumer role.
+#
+# These provide sensible fallbacks. All values are overridden by the actual
+# WorkerPool CR spec at runtime — the operator runner maps CR spec fields
+# to Ansible variables automatically (camelCase → snake_case, nested objects
+# preserved as dicts).
+#
+# Mapping: CR spec field                              → Ansible variable
+#   spec.provider.apiEndpoint                         → provider.api_endpoint
+#   spec.provider.namespace                           → provider.namespace
+#   spec.provider.credentialsSecret                   → provider.credentials_secret
+#   spec.provider.maxPoolSize                         → provider.max_pool_size
+#   spec.provider.gateway.ip                          → provider.gateway.ip
+#   spec.provider.gateway.prefixLength                → provider.gateway.prefix_length
+#   spec.provider.gateway.defaultRouter               → provider.gateway.default_router
+#   spec.provider.gateway.resources.*                 → provider.gateway.resources.*
+#   spec.provider.networking.macPrefix                → provider.networking.mac_prefix
+#   spec.provider.networking.internalSubnet           → provider.networking.internal_subnet
+#   spec.consumer.networking.topology                 → consumer.networking.topology
+#   spec.consumer.networking.dnsServer                → consumer.networking.dns_server
+#   spec.consumer.networking.internalNetwork          → consumer.networking.internal_network
+#   spec.consumer.networking.internalGateway          → consumer.networking.internal_gateway
+#   spec.consumer.machineConfigPool                   → consumer.machine_config_pool
+#   spec.consumer.workers.count                       → consumer.workers.count
+#   spec.consumer.workers.namePrefix                  → consumer.workers.name_prefix
+#   spec.consumer.workers.resources.*                 → consumer.workers.resources.*
+
+provider:
+  api_endpoint: ""
+  namespace: ""
+  credentials_secret: "hci-provisioner-credentials"
+  max_pool_size: 10
+  gateway:
+    ip: ""
+    prefix_length: 24
+    default_router: "172.16.0.1"
+    resources:
+      cpu: 2
+      memory: "4Gi"
+      storage: "30Gi"
+      storage_class: "ocs-storagecluster-ceph-rbd-virtualization"
+      data_source_name: "centos-stream9"
+      data_source_namespace: "openshift-virtualization-os-images"
+  networking:
+    mac_prefix: "52:54:00"
+    internal_subnet: "192.168.100.0/24"
+
+consumer:
+  networking:
+    topology: "direct"
+    dns_server: ""
+    internal_network: ""
+    internal_gateway: ""
+  machine_config_pool: "hci-vm"
+  workers:
+    count: 0
+    name_prefix: "worker-x86"
+    resources:
+      cpu: 4
+      memory: "8Gi"
+      storage: "50Gi"
+
+# Gateway HTTP root — must match gateway_http_root in hci-provisioner defaults.
+# Used by BS-06b to write desired-version.txt via SSH.
+gateway_http_root: "/var/www/html"

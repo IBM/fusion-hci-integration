@@ -1,0 +1,30 @@
+apiVersion: machineconfiguration.openshift.io/v1
+kind: MachineConfig
+metadata:
+  labels:
+    machineconfiguration.openshift.io/role: worker
+    node-platform: s390x
+  name: 99-worker-s390x-hci-network-route
+spec:
+  config:
+    ignition:
+      version: 3.5.0
+    systemd:
+      units:
+        - name: hci-network-route.service
+          enabled: true
+          contents: |
+            [Unit]
+            Description=Add static route to HCI worker network
+            After=network-online.target
+            Wants=network-online.target
+
+            [Service]
+            Type=oneshot
+            RemainAfterExit=yes
+            ExecStart=/bin/bash -c '/usr/sbin/ip route add 192.168.100.0/24 via 172.16.1.100 || true'
+
+            [Install]
+            WantedBy=multi-user.target
+
+# Made with Bob

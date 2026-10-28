@@ -1,0 +1,9 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Internal registry overlay — build output goes to an ImageStreamTag.
+# No patches needed: the base BuildConfig already uses ImageStreamTag output.
+# ImageStreams are created by `make apply-buildconfigs` before the build runs.
+
+resources:
+  - ../../base

@@ -1,0 +1,127 @@
+---
+# step_gateway_vm_teardown.yml — BS-04 teardown path
+#
+# Called from advance_steps.yml when GatewayVM step is Pending and mode==teardown.
+#
+# Deletes VirtualMachine, DataVolume, and cloud-init Secret from the HCI namespace.
+# All deletes use wait: false — KubeVirt's own finalizer ensures the VMI is powered
+# off before the VM resource is removed. The step is marked Complete once all three
+# resources are confirmed absent.
+#
+# Idempotent: if resources are already absent (e.g. after a partial teardown and retry)
+# kubernetes.core.k8s state: absent is a no-op.
+
+# ── Write HCI kubeconfig from credentials Secret ──────────────────────────────
+
+- name: "BS-04 teardown | Read provisioner credentials Secret"
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: "{{ provider_access.credentials_secret }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+  register: _td_prov_secret
+
+- name: "BS-04 teardown | Write HCI kubeconfig to temp file"
+  ansible.builtin.tempfile:
+    state: file
+    suffix: ".kubeconfig"
+  register: _td_kubeconfig_file
+
+- name: "BS-04 teardown | Populate HCI kubeconfig temp file"
+  ansible.builtin.copy:
+    content: >-
+      {{
+        (_td_prov_secret.resources | first).data.kubeconfig
+        | b64decode
+      }}
+    dest: "{{ _td_kubeconfig_file.path }}"
+    mode: "0600"
+
+# ── Delete VirtualMachine (async — KubeVirt finalizer handles VMI shutdown) ───
+
+- name: "BS-04 teardown | Delete gateway VirtualMachine"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ _td_kubeconfig_file.path }}"
+    state: absent
+    api_version: kubevirt.io/v1
+    kind: VirtualMachine
+    name: hci-gateway
+    namespace: "{{ provider_access.namespace }}"
+    wait: false
+
+# ── Delete DataVolume ─────────────────────────────────────────────────────────
+
+- name: "BS-04 teardown | Delete gateway DataVolume"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ _td_kubeconfig_file.path }}"
+    state: absent
+    api_version: cdi.kubevirt.io/v1beta1
+    kind: DataVolume
+    name: hci-gateway-rootdisk
+    namespace: "{{ provider_access.namespace }}"
+    wait: false
+
+# ── Delete cloud-init Secret ──────────────────────────────────────────────────
+
+- name: "BS-04 teardown | Delete cloud-init Secret"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ _td_kubeconfig_file.path }}"
+    state: absent
+    api_version: v1
+    kind: Secret
+    name: hci-gateway-cloudinit
+    namespace: "{{ provider_access.namespace }}"
+
+# ── Verify all resources are gone ────────────────────────────────────────────
+# A VM with deletionTimestamp set is effectively gone — treat Terminating as
+# absent so the step can advance without waiting for KubeVirt's own finalizer
+# chain to fully complete.
+
+- name: "BS-04 teardown | Check VirtualMachine absent or terminating"
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ _td_kubeconfig_file.path }}"
+    api_version: kubevirt.io/v1
+    kind: VirtualMachine
+    name: hci-gateway
+    namespace: "{{ provider_access.namespace }}"
+  register: _td_vm_check
+
+- name: "BS-04 teardown | Check DataVolume absent"
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ _td_kubeconfig_file.path }}"
+    api_version: cdi.kubevirt.io/v1beta1
+    kind: DataVolume
+    name: hci-gateway-rootdisk
+    namespace: "{{ provider_access.namespace }}"
+  register: _td_dv_check
+
+- name: "BS-04 teardown | Set resources_gone fact"
+  ansible.builtin.set_fact:
+    _td_resources_gone: >-
+      {{
+        (_td_vm_check.resources | length == 0
+         or (_td_vm_check.resources | first).metadata.deletionTimestamp is defined)
+        and _td_dv_check.resources | length == 0
+      }}
+
+# ── Clean up kubeconfig temp file ─────────────────────────────────────────────
+
+- name: "BS-04 teardown | Remove HCI kubeconfig temp file"
+  ansible.builtin.file:
+    path: "{{ _td_kubeconfig_file.path }}"
+    state: absent
+
+# ── Signal result to advance_steps.yml ───────────────────────────────────────
+
+- name: "BS-04 teardown | Set step result fact"
+  ansible.builtin.set_fact:
+    _step_result_gatewayvm:
+      status: "{{ 'Complete' if _td_resources_gone else 'InProgress' }}"
+      lastTransitionTime: "{{ ansible_date_time.iso8601 }}"
+      message: "{{ 'Gateway VM resources removed from HCI.' if _td_resources_gone else 'Deleting gateway VM resources from HCI (terminating).' }}"
+
+- name: "BS-04 teardown | Log outcome"
+  ansible.builtin.debug:
+    msg: >-
+      GatewayVM teardown: {{ 'Complete — all resources removed.' if _td_resources_gone
+      else 'InProgress — resources still terminating. Will re-check next reconcile.' }}

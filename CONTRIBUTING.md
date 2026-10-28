@@ -1,84 +1,272 @@
-## Contributing In General
-Our project welcomes external contributions. If you have an itch, please feel
-free to scratch it.
+# Contributing to Fusion HCI Multi-Architecture Integration
 
-To contribute code or documentation, please submit a **FIXME** [pull request](https://github.com/ibm/repo-template/pulls).
+Thank you for your interest in contributing! This document provides guidelines for contributing to the project.
 
-A good way to familiarize yourself with the codebase and contribution process is
-to look for and tackle low-hanging fruit in the **FIXME** [issue tracker](https://github.com/ibm/repo-template/issues).
-Before embarking on a more ambitious contribution, please quickly [get in touch](#communication) with us.
+## Code of Conduct
 
-**Note: We appreciate your effort, and want to avoid a situation where a contribution
-requires extensive rework (by you or by us), sits in backlog for a long time, or
-cannot be accepted at all!**
+- Be respectful and inclusive
+- Focus on constructive feedback
+- Help others learn and grow
+- Maintain a professional environment
 
-### Proposing new features
+## How to Contribute
 
-If you would like to implement a new feature, please **FIXME** [raise an issue](https://github.com/ibm/repo-template/issues)
-before sending a pull request so the feature can be discussed. This is to avoid
-you wasting your valuable time working on a feature that the project developers
-are not interested in accepting into the code base.
+### Reporting Issues
 
-### Fixing bugs
+1. **Search existing issues** to avoid duplicates
+2. **Use issue templates** when available
+3. **Provide details**:
+   - OpenShift versions (main cluster and HCI cluster, 4.20+)
+   - Deployment topology (mediated or direct) and platform (z/VM, KVM, LPAR)
+   - Error messages and logs
+   - Steps to reproduce
 
-If you would like to fix a bug, please **FIXME** [raise an issue](https://github.com/ibm/repo-template/issues) before sending a
-pull request so it can be tracked.
+### Suggesting Enhancements
 
-### Merge approval
+1. **Check the roadmap** in [Operator Roadmap](docs/development/operator-roadmap.md)
+2. **Open a discussion** for major changes
+3. **Describe the use case** and benefits
+4. **Consider backwards compatibility**
 
-The project maintainers use LGTM (Looks Good To Me) in comments on the code
-review to indicate acceptance. A change requires LGTMs from two of the
-maintainers of each component affected.
+### Contributing Code
 
-For a list of the maintainers, see the [MAINTAINERS.md](MAINTAINERS.md) page.
+#### Getting Started
 
-## Legal
+1. **Fork the repository**
+2. **Clone your fork**:
+   ```bash
+   git clone https://github.com/your-username/fusion-hci-integration.git
+   cd fusion-hci-integration
+   ```
+3. **Create a branch**:
+   ```bash
+   git checkout -b feature/your-feature-name
+   ```
 
-Each source file must include a license header for the Apache
-Software License 2.0. Using the SPDX format is the simplest approach.
-e.g.
+#### Development Guidelines
+
+**Documentation**:
+- Update documentation for any user-facing changes
+- Use clear, concise language
+- Include examples where appropriate
+- Test documentation builds: `mkdocs serve`
+
+**Configuration Files**:
+- Never commit credentials or sensitive data
+- Use `.example` suffix for template files
+- Update `.gitignore` if needed
+- Validate YAML syntax
+
+**Kustomize Overlays and Manifests**:
+- Keep base resources generic
+- Use overlays for topology-specific changes (`mediated` vs `direct`)
+- Test with `kubectl kustomize`
+- Validate template generation with `./generate-setup`
+
+**Operators**:
+- Follow Ansible operator and controller-runtime standards
+- Test changes using `operator/hci-consumer/run-local.sh` and `operator/hci-provisioner/run-local.sh`
+- Keep API calls in `observe_world.yml`
+
+**Scripts**:
+- Use bash with error handling (`set -euo pipefail`)
+- Add usage documentation
+- Make scripts idempotent where possible
+- Test on both mediated and direct topologies
+
+#### Testing
+
+**Before submitting**:
+1. Test your changes in a real environment
+2. Verify both mediated and direct topologies (if applicable)
+3. Check documentation builds without errors: `.venv/bin/mkdocs build`
+4. Run any existing tests
+
+**Test checklist**:
+- [ ] Gateway VM deploys and boots successfully
+- [ ] Worker VMs join the cluster and transition to Ready
+- [ ] Network connectivity works across architectures
+- [ ] Documentation is accurate and links resolve cleanly
+- [ ] No credentials in commits
+
+#### Commit Messages
+
+Follow conventional commits format:
 
 ```
-/*
-Copyright <holder> All Rights Reserved.
+<type>(<scope>): <subject>
 
-SPDX-License-Identifier: Apache-2.0
-*/
+<body>
+
+<footer>
 ```
 
-We have tried to make it as easy as possible to make contributions. This
-applies to how we handle the legal aspects of contribution. We use the
-same approach - the [Developer's Certificate of Origin 1.1 (DCO)](https://github.com/hyperledger/fabric/blob/master/docs/source/DCO1.1.txt) - that the Linux® Kernel [community](https://elinux.org/Developer_Certificate_Of_Origin)
-uses to manage code contributions.
+**Types**:
+- `feat`: New feature
+- `fix`: Bug fix
+- `docs`: Documentation changes
+- `refactor`: Code refactoring
+- `test`: Test additions/changes
+- `chore`: Maintenance tasks
 
-We simply ask that when submitting a patch for review, the developer
-must include a sign-off statement in the commit message.
-
-Here is an example Signed-off-by line, which indicates that the
-submitter accepts the DCO:
-
+**Examples**:
 ```
-Signed-off-by: John Doe <john.doe@example.com>
-```
+feat(operator): add support for custom storage class in worker VMs
 
-You can include this automatically when you commit a change to your
-local git repository using the following command:
+Add storageClassName parameter to worker VM template
+to allow users to specify custom storage classes.
 
-```
-git commit -s
+Closes #123
 ```
 
-## Communication
-**FIXME** Please feel free to connect with us on our [Slack channel](link).
+```
+docs(direct): clarify master route configuration
 
-## Setup
-**FIXME** Please add any special setup instructions for your project to help the developer
-become productive quickly.
+Improve documentation for direct topology master node
+routing setup with troubleshooting steps.
+```
+
+#### Pull Request Process
+
+1. **Update documentation** for any user-facing changes
+2. **Update CHANGELOG.md** (if applicable)
+3. **Ensure tests pass** (manual testing required)
+4. **Request review** from maintainers
+5. **Address feedback** promptly
+6. **Squash commits** if requested
+
+**PR Description Template**:
+```markdown
+## Description
+Brief description of changes
+
+## Type of Change
+- [ ] Bug fix
+- [ ] New feature
+- [ ] Documentation update
+- [ ] Refactoring
 
 ## Testing
-**FIXME** Please provide information that helps the developer test any changes they make
-before submitting.
+- [ ] Tested on mediated topology
+- [ ] Tested on direct topology
+- [ ] Documentation builds successfully
+- [ ] No credentials in commits
 
-## Coding style guidelines
-**FIXME** Optional, but recommended: please share any specific style guidelines you might
-have for your project.
+## Related Issues
+Closes #<issue-number>
+
+## Screenshots (if applicable)
+```
+
+### Contributing Documentation
+
+Documentation is crucial! We welcome:
+- Typo fixes and clarifications
+- Additional examples
+- Troubleshooting guides
+- Architecture diagrams
+- Tutorial improvements
+
+**Documentation structure**:
+```
+docs/
+├── index.md                    # Landing page
+├── getting-started.md          # Quick start guide
+├── prerequisites.md            # Requirements
+├── deployment-variants.md      # Mediated vs Direct topologies
+├── architecture/               # Architecture docs
+├── configuration/              # Configuration guides
+├── operations/                 # Operational guides
+└── development/                # Developer guides
+```
+
+**Building docs locally**:
+```bash
+.venv/bin/mkdocs build
+# or: .venv/bin/mkdocs serve (Open http://localhost:8000)
+```
+
+### Areas Needing Contribution
+
+#### High Priority
+- [ ] Additional deployment examples
+- [ ] Troubleshooting scenarios
+- [ ] Performance tuning guides
+- [ ] Security hardening documentation
+
+#### Medium Priority
+- [ ] Monitoring and alerting setup
+- [ ] Backup and recovery procedures
+- [ ] Upgrade procedures
+- [ ] Multi-cluster examples
+
+#### Future Work
+- [ ] Operator development (see [Operator Roadmap](docs/development/operator-roadmap.md))
+- [ ] ARM architecture support
+- [ ] Power architecture support
+- [ ] Automated testing framework
+
+## Development Environment
+
+### Required Tools
+- `oc` or `kubectl` CLI
+- `kustomize` (or `kubectl kustomize`)
+- `mkdocs` with material theme
+- Access to OpenShift clusters (main + HCI)
+
+### Recommended Tools
+- `yamllint` for YAML validation
+- `shellcheck` for shell script linting
+- `pre-commit` hooks (optional)
+
+## Style Guidelines
+
+### YAML
+- Use 2 spaces for indentation
+- Quote strings when necessary
+- Use `---` document separator
+- Add comments for complex configurations
+
+### Markdown
+- Use ATX-style headers (`#`)
+- Add blank lines around code blocks
+- Use fenced code blocks with language tags
+- Keep lines under 120 characters (soft limit)
+
+### Shell Scripts
+- Use `#!/bin/bash` shebang
+- Add `set -euo pipefail` for safety
+- Use meaningful variable names
+- Add usage documentation
+- Quote variables: `"${VAR}"`
+
+## Security
+
+### Reporting Security Issues
+**Do not** open public issues for security vulnerabilities.
+
+Contact maintainers privately:
+- Email: OpenShift-on-Z team (via GitHub Issues marked as security)
+- Include detailed description and reproduction steps
+
+### Security Best Practices
+- Never commit credentials
+- Use secrets management (Sealed Secrets, Vault, etc.)
+- Follow principle of least privilege
+- Keep dependencies updated
+- Review security implications of changes
+
+## Questions?
+
+- **Documentation**: Check [docs/](docs/)
+- **Discussions**: Use GitHub Discussions
+- **Issues**: Search existing issues
+- **Chat**: Join our community chat (if available)
+
+## License
+
+By contributing, you agree that your contributions will be licensed under the Apache License 2.0.
+
+---
+
+Thank you for contributing to make multi-architecture OpenShift deployments easier!

@@ -1,0 +1,129 @@
+---
+# step_workers_teardown.yml — Workers teardown path
+#
+# Called from advance_steps.yml when Workers step is Pending or InProgress
+# and mode == teardown.
+#
+# Responsibilities:
+#   List all worker VMs in provider_access.namespace that belong to this
+#   consumer (label hci-integration.openshift.io/consumer=<worker_pool_ref>),
+#   delete each VM and its rootdisk DataVolume, then re-check until all are
+#   absent before marking the step Complete.
+#
+# Why the provisioner deletes worker VMs at teardown:
+#   Worker VMs hold VMI attachments to the UserDefinedNetwork. The UDN
+#   controller finalizer blocks UDN deletion until all attachments are
+#   released. The consumer cleanup role gates on WPP Complete — meaning VMs
+#   must be gone before the consumer can act. Delegating VM deletion here
+#   breaks the deadlock and gives UDN a clean deletion path.
+#
+# Consumer cleanup consequence:
+#   By the time WPP teardown reaches Complete, all worker VMs are already
+#   gone. The consumer cleanup role only needs to delete the node objects.
+#   remove_worker_vm.yml VM/DV deletes are idempotent (state: absent) so
+#   the cleanup role still works correctly without modification.
+
+# ── Write HCI kubeconfig from credentials Secret ──────────────────────────────
+
+- name: "Workers teardown | Read provisioner credentials Secret"
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: "{{ provider_access.credentials_secret }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+  register: _wt_prov_secret
+
+- name: "Workers teardown | Write HCI kubeconfig to temp file"
+  ansible.builtin.tempfile:
+    state: file
+    suffix: ".kubeconfig"
+  register: _wt_kubeconfig_file
+
+- name: "Workers teardown | Populate HCI kubeconfig temp file"
+  ansible.builtin.copy:
+    content: >-
+      {{
+        (_wt_prov_secret.resources | first).data.kubeconfig
+        | b64decode
+      }}
+    dest: "{{ _wt_kubeconfig_file.path }}"
+    mode: "0600"
+
+# ── List consumer-owned worker VMs ────────────────────────────────────────────
+
+- name: "Workers teardown | List consumer-owned VMs on provider cluster"
+  kubernetes.core.k8s_info:
+    kubeconfig: "{{ _wt_kubeconfig_file.path }}"
+    api_version: kubevirt.io/v1
+    kind: VirtualMachine
+    namespace: "{{ provider_access.namespace }}"
+    label_selectors:
+      - "hci-integration.openshift.io/consumer={{ worker_pool_ref }}"
+  register: _wt_vms
+
+- name: "Workers teardown | Build list of remaining VM names"
+  ansible.builtin.set_fact:
+    _wt_vm_names: "{{ _wt_vms.resources | map(attribute='metadata.name') | list }}"
+
+- name: "Workers teardown | Log VM list"
+  ansible.builtin.debug:
+    msg: >-
+      Workers teardown: {{ _wt_vm_names | length }} VM(s) remaining:
+      {{ _wt_vm_names | join(', ') | default('(none)') }}
+
+# ── Delete all remaining VMs and their DataVolumes ────────────────────────────
+# Fire-and-forget (wait: false) — re-check on next reconcile.
+
+- name: "Workers teardown | Delete VirtualMachine"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ _wt_kubeconfig_file.path }}"
+    api_version: kubevirt.io/v1
+    kind: VirtualMachine
+    name: "{{ item }}"
+    namespace: "{{ provider_access.namespace }}"
+    state: absent
+    wait: false
+  loop: "{{ _wt_vm_names }}"
+  loop_control:
+    label: "{{ item }}"
+
+- name: "Workers teardown | Delete DataVolume"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ _wt_kubeconfig_file.path }}"
+    api_version: cdi.kubevirt.io/v1beta1
+    kind: DataVolume
+    name: "{{ item }}-rootdisk"
+    namespace: "{{ provider_access.namespace }}"
+    state: absent
+    wait: false
+  loop: "{{ _wt_vm_names }}"
+  loop_control:
+    label: "{{ item }}-rootdisk"
+
+# ── Clean up kubeconfig temp file ─────────────────────────────────────────────
+
+- name: "Workers teardown | Remove HCI kubeconfig temp file"
+  ansible.builtin.file:
+    path: "{{ _wt_kubeconfig_file.path }}"
+    state: absent
+
+# ── Signal result to advance_steps.yml ───────────────────────────────────────
+
+- name: "Workers teardown | Set step result fact"
+  ansible.builtin.set_fact:
+    _wt_all_gone: "{{ _wt_vm_names | length == 0 }}"
+    _step_result_workers:
+      status: "{{ 'Complete' if _wt_vm_names | length == 0 else 'InProgress' }}"
+      lastTransitionTime: "{{ ansible_date_time.iso8601 }}"
+      message: >-
+        {{
+          'All worker VMs removed from provider cluster.'
+          if _wt_vm_names | length == 0 else
+          (_wt_vm_names | length | string) + ' worker VM(s) still terminating: ' + _wt_vm_names | join(', ')
+        }}
+
+- name: "Workers teardown | Log outcome"
+  ansible.builtin.debug:
+    msg: >-
+      Workers teardown: {{ 'Complete — all VMs removed.' if _wt_all_gone
+      else 'InProgress — ' + (_wt_vm_names | length | string) + ' VM(s) still terminating.' }}

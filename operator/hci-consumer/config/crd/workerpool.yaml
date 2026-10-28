@@ -1,0 +1,400 @@
+---
+# WorkerPool Custom Resource Definition
+#
+# Installed on the consumer (LO) cluster.
+# Represents an ongoing relationship between a consumer cluster and a provider
+# cluster: the consumer wants a pool of worker nodes backed by VMs on the
+# provider.
+#
+# The CR has two ownership sections reflecting the two-domain setup process:
+#   spec.provider  — filled by the provider (HCI) admin; handed to the consumer
+#                    admin as part of the cross-domain handover bundle
+#   spec.consumer  — filled by the consumer (LO) admin locally
+#
+# The hci-consumer operator watches this resource and drives the full lifecycle:
+#   bootstrap → worker VM scale-up/scale-down → teardown
+#
+# Setup script (provider admin):
+#   hci-cluster/setup-consumer-rbac.sh
+#   Output: hci-provisioner-credentials Secret handed to consumer admin
+
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  name: workerpools.hci-integration.openshift.io
+  annotations:
+    description: >-
+      Represents a worker pool relationship between a consumer cluster and a
+      provider cluster. The provider admin fills spec.provider; the consumer
+      admin fills spec.consumer. The hci-consumer operator manages the full
+      lifecycle: bootstrap, VM scale-up/down, teardown.
+spec:
+  group: hci-integration.openshift.io
+  names:
+    kind: WorkerPool
+    listKind: WorkerPoolList
+    plural: workerpools
+    singular: workerpool
+    shortNames:
+      - wp
+  scope: Namespaced
+  versions:
+    - name: v1alpha1
+      served: true
+      storage: true
+      subresources:
+        status: {}
+      additionalPrinterColumns:
+        - name: Phase
+          type: string
+          jsonPath: .status.phase
+          description: Current lifecycle phase
+        - name: Workers
+          type: integer
+          jsonPath: .spec.consumer.workers.count
+          description: Desired worker count
+        - name: Deployed
+          type: integer
+          jsonPath: .status.deployedWorkers
+          description: Currently deployed workers on provider
+        - name: Ready
+          type: integer
+          jsonPath: .status.readyWorkers
+          description: Workers with a joined node on this cluster
+        - name: Pending
+          type: integer
+          jsonPath: .status.pendingWorkers
+          description: Workers not yet deployed (deficit to desired count)
+        - name: Age
+          type: date
+          jsonPath: .metadata.creationTimestamp
+      schema:
+        openAPIV3Schema:
+          type: object
+          properties:
+
+            spec:
+              type: object
+              required:
+                - provider
+                - consumer
+              properties:
+
+                # ── Provider section ─────────────────────────────────────────
+                # Filled by the provider (HCI) admin.
+                # Handed to the consumer (LO) admin as part of the handover bundle
+                # produced by hci-cluster/setup-consumer-rbac.sh.
+
+                provider:
+                  type: object
+                  required:
+                    - apiEndpoint
+                    - namespace
+                    - credentialsSecret
+                  description: >-
+                    Provider cluster connection and capacity details.
+                    Filled by the provider (HCI) admin at setup time.
+                  properties:
+
+                    apiEndpoint:
+                      type: string
+                      description: API server URL of the provider cluster.
+                      example: "https://api.hci.example.com:6443"
+
+                    namespace:
+                      type: string
+                      description: >-
+                        Namespace on the provider cluster where worker VMs and
+                        the gateway VM are created.
+                      example: "main-cluster-workers"
+
+                    credentialsSecret:
+                      type: string
+                      description: >-
+                        Name of the Secret in this namespace containing a kubeconfig
+                        with namespace-admin access to provider.namespace on the
+                        provider cluster. Created by setup-consumer-rbac.sh and
+                        placed by the consumer admin before the operator can reconcile.
+                      default: "hci-provisioner-credentials"
+
+                    maxPoolSize:
+                      type: integer
+                      minimum: 1
+                      default: 10
+                      description: >-
+                        Maximum number of worker VMs the provider has committed to
+                        host in this namespace. The operator will not create more VMs
+                        than this value even if consumer.workers.count is higher.
+
+                    gateway:
+                      type: object
+                      required:
+                        - ip
+                        - prefixLength
+                        - defaultRouter
+                      description: >-
+                        Gateway VM configuration. The gateway VM bridges the provider
+                        internal network to the consumer cluster network, providing
+                        DHCP, PXE, and NAT services for worker VMs.
+                      properties:
+
+                        ip:
+                          type: string
+                          description: >-
+                            External interface IP of the gateway VM on the provider
+                            network. Used as reachability probe target and NAT address.
+                          example: "172.16.1.100"
+
+                        prefixLength:
+                          type: integer
+                          minimum: 1
+                          maximum: 32
+                          description: >-
+                            Prefix length for the gateway external interface IP.
+                            Together with ip, defines the external network for
+                            firewall suppress-masquerade rules.
+                          example: 16
+
+                        defaultRouter:
+                          type: string
+                          description: Default route for the gateway external interface.
+                          example: "172.16.0.1"
+
+                        resources:
+                          type: object
+                          description: >-
+                            Compute and storage resources for the gateway VM.
+                            All fields are optional — operator defaults apply.
+                          properties:
+                            cpu:
+                              type: integer
+                              minimum: 1
+                              default: 2
+                            memory:
+                              type: string
+                              default: "4Gi"
+                            storage:
+                              type: string
+                              default: "30Gi"
+
+                    networking:
+                      type: object
+                      required:
+                        - macPrefix
+                        - internalSubnet
+                      description: >-
+                        Provider-side networking parameters. Defines the internal VM
+                        network on the provider cluster.
+                      properties:
+
+                        macPrefix:
+                          type: string
+                          description: >-
+                            MAC address prefix for all VMs created in this pool.
+                            Must be unique per consumer namespace on the provider cluster
+                            to avoid MAC collisions.
+                          default: "52:54:00"
+                          example: "52:54:00"
+
+                        internalSubnet:
+                          type: string
+                          description: >-
+                            Internal subnet for worker VMs and the gateway internal
+                            interface. Gateway internal IP is derived as network
+                            address + .1; worker start IP as network address + .10.
+                          example: "192.168.100.0/24"
+
+                # ── Consumer section ─────────────────────────────────────────
+                # Filled by the consumer (LO) admin locally.
+
+                consumer:
+                  type: object
+                  required:
+                    - networking
+                    - workers
+                  description: >-
+                    Consumer cluster configuration. Filled by the consumer (LO)
+                    admin. Defines how worker nodes integrate into the consumer
+                    cluster and how many workers are desired.
+                  properties:
+
+                    networking:
+                      type: object
+                      required:
+                        - topology
+                        - dnsServer
+                      description: >-
+                        Consumer-side networking parameters. Defines how the worker
+                        VMs connect back to the consumer cluster.
+                      x-kubernetes-validations:
+                        - rule: >-
+                            self.topology != 'mediated' ||
+                            (has(self.internalNetwork) && has(self.internalGateway))
+                          message: >-
+                            consumer.networking.internalNetwork and
+                            consumer.networking.internalGateway are required when
+                            topology is mediated
+                      properties:
+
+                        topology:
+                          type: string
+                          description: >-
+                            Network topology between consumer and provider.
+                            direct:   provider network is directly reachable from
+                                      consumer (L2 or routed).
+                            mediated: consumer reaches provider via an intermediate
+                                      network (e.g. OSA/HiperSockets on s390x).
+                          enum:
+                            - direct
+                            - mediated
+                          default: direct
+
+                        dnsServer:
+                          type: string
+                          description: >-
+                            DNS server that resolves consumer cluster-internal names
+                            (api-int, node FQDNs). Typically the consumer bastion.
+                            The gateway dnsmasq forwards all non-local queries here
+                            so worker VMs can resolve cluster-internal names.
+                          example: "172.16.0.1"
+
+                        internalNetwork:
+                          type: string
+                          description: >-
+                            Consumer-side network range reachable via internalGateway.
+                            Required when topology is mediated.
+                          example: "10.0.0.0/24"
+
+                        internalGateway:
+                          type: string
+                          description: >-
+                            Gateway on the consumer side for reaching the consumer
+                            cluster's internal network. Required when topology is mediated.
+                          example: "172.16.0.1"
+
+                    machineConfigPool:
+                      type: string
+                      default: "hci-vm"
+                      description: >-
+                        Name of the MachineConfigPool that must exist on this cluster
+                        before bootstrap can complete. The pool defines the node role
+                        for HCI worker VMs (kernel arguments, node selector label).
+                        The cluster admin creates this pool manually using the kustomize
+                        overlays in main-cluster/configuration/overlays/.
+                        The provisioner operator validates its existence before placing
+                        the ignition file on the gateway (the MCS config path
+                        /config/<name> only exists once the pool is present).
+                        Defaults to "hci-vm". Change only if the cluster admin has
+                        prepared the pool under a different name.
+                      example: "hci-vm"
+
+                    workers:
+                      type: object
+                      required:
+                        - count
+                      description: Worker VM pool configuration.
+                      properties:
+
+                        count:
+                          type: integer
+                          minimum: 0
+                          description: >-
+                            Desired number of worker VMs. The operator reconciles
+                            the actual pool size toward this value. Capped at
+                            provider.maxPoolSize at runtime; CEL admission rule
+                            enforced on update.
+
+                        namePrefix:
+                          type: string
+                          default: "worker-x86"
+                          description: >-
+                            Prefix for worker VM and node names.
+                            VMs are named <namePrefix>-1, <namePrefix>-2, etc.
+
+                        resources:
+                          type: object
+                          description: >-
+                            Compute and storage resources per worker VM.
+                            All fields are optional — operator defaults apply.
+                          properties:
+                            cpu:
+                              type: integer
+                              minimum: 1
+                              default: 4
+                            memory:
+                              type: string
+                              default: "8Gi"
+                            storage:
+                              type: string
+                              default: "50Gi"
+
+            status:
+              type: object
+              description: >-
+                Current lifecycle state. Managed exclusively by the
+                hci-consumer operator — do not edit manually.
+              properties:
+
+                phase:
+                  type: string
+                  description: Current lifecycle phase of this worker pool.
+                  enum:
+                    - Provisioning
+                    - Ready
+                    - ScalingUp
+                    - ScalingDown
+                    - ScalingDownBlocked
+                    - Deprovisioning
+                    - Deprovisioned
+                    - Failed
+
+                deployedWorkers:
+                  type: integer
+                  description: Number of worker VMs currently deployed on the provider.
+
+                readyWorkers:
+                  type: integer
+                  description: >-
+                    Number of worker nodes that have joined this cluster and carry the
+                    expected MCP role label. A node is counted as ready as soon as it
+                    appears in the node list — no additional readiness check is applied.
+
+                pendingWorkers:
+                  type: integer
+                  description: >-
+                    Convergence distance: how many VMs still need to be created
+                    (scale-up) or deleted (scale-down) before the pool reaches the
+                    desired count. Zero means the pool is converged.
+
+                bootfilesVersion:
+                  type: string
+                  description: >-
+                    RHCOS version confirmed present on the gateway HTTP server.
+                    Set by the operator when current-version.txt matches ClusterVersion.
+
+                conditions:
+                  type: array
+                  items:
+                    type: object
+                    required:
+                      - type
+                      - status
+                    properties:
+                      type:
+                        type: string
+                        enum:
+                          - ProviderCredentialsReady
+                          - WorkerReconcileActive
+                          - ScaleDownBlocked
+                          - CountExceedsMaxPoolSize
+                          - MachineConfigPoolReady
+                      status:
+                        type: string
+                        enum: ["True", "False", "Unknown"]
+                      reason:
+                        type: string
+                      message:
+                        type: string
+                      lastTransitionTime:
+                        type: string
+                        format: date-time

@@ -1,0 +1,198 @@
+---
+# LO-03: Create a single worker VM on the HCI cluster.
+#
+# Called in a loop from scale_up.yml with loop_var: vm_name (string).
+# The kubeconfig temp file path is available as hci_kubeconfig_file.path.
+#
+# Index is derived from the name suffix so MAC address calculation stays
+# correct even when filling a gap (e.g. recreating worker-x86-1 after it
+# was removed while worker-x86-2 through -5 still exist).
+#
+# MAC formula:  <macPrefix>:00:00:<hex>
+#   hex = 0x10 + (index - 1)
+#   index 1 → 0x10, index 2 → 0x11, ...
+#   macPrefix defaults to 52:54:00 but is configurable via spec.workers.macPrefix
+#
+# Stale node object cleanup:
+#   If a node object with this name still exists on the main cluster (e.g. from
+#   a previous scale-down where LOOps did not delete the object, or where the
+#   object was retained for inspection), it MUST be deleted before the new VM
+#   boots. hci-node-manager's bootstrap CSR approver skips approval when a node
+#   object with the same name already exists — the new kubelet's CSR would be
+#   silently ignored and the node would never join.
+
+- name: "LO-03 | Materialise worker resource spec with defaults"
+  # consumer.workers.resources is optional in the WorkerPool CR. The operator
+  # runner overwrites the entire 'consumer' variable from the CR spec, losing
+  # role defaults for any sub-key the CR omits. Materialise here with explicit
+  # defaults before any k8s_info call pollutes the variable scope.
+  ansible.builtin.set_fact:
+    _worker_res:
+      # cpu must be an integer — KubeVirt rejects strings for uint32 fields.
+      cpu:     "{{ (consumer['workers'].get('resources') or {}).get('cpu',     4) | int }}"
+      memory:  "{{ (consumer['workers'].get('resources') or {}).get('memory', '8Gi') }}"
+      storage: "{{ (consumer['workers'].get('resources') or {}).get('storage', '50Gi') }}"
+
+- name: "LO-03 | Derive per-VM values for {{ vm_name }}"
+  ansible.builtin.set_fact:
+    vm_dv_name: "{{ vm_name }}-rootdisk"
+    # Extract numeric index from the trailing -N suffix of the VM name.
+    # "worker-x86-3" → "3"
+    vm_index_str: "{{ vm_name | regex_replace('^.*-(\\d+)$', '\\1') }}"
+
+- name: "LO-03 | Derive MAC for {{ vm_name }}"
+  ansible.builtin.set_fact:
+    # '%02x' % (0x10 + n) is invalid in Ansible 2.9 Jinja2 — use decimal 16
+    # and the | format filter instead.
+    vm_mac: "{{ provider.networking.mac_prefix }}:00:00:{{ '%02x' | format(16 + vm_index_str | int - 1) }}"
+
+- name: "LO-03 | Log VM creation plan"
+  ansible.builtin.debug:
+    msg: "Creating VM {{ vm_name }} (index={{ vm_index_str }}, MAC={{ vm_mac }}, DV={{ vm_dv_name }})"
+
+# ── Stale node cleanup ────────────────────────────────────────────────────────
+#
+# Delete any pre-existing node object BEFORE creating the VM.
+# If the node object exists when the new kubelet submits its bootstrap CSR,
+# hci-node-manager will see the node as "already present" and skip approval —
+# the node never joins. Deleting it here is safe: the old VM is already gone
+# (scale-down removed it), so the object is purely stale metadata.
+#
+# Node objects use FQDN names — look up with a fresh k8s_info to avoid
+# relying on _obs_all_nodes being in scope across include_tasks boundaries.
+
+- name: "LO-03 | Look up node FQDN for stale node {{ vm_name }}"
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Node
+  register: _create_all_nodes
+
+- name: "LO-03 | Resolve FQDN for stale node {{ vm_name }}"
+  ansible.builtin.set_fact:
+    _stale_node_fqdn: >-
+      {{
+        _create_all_nodes.resources
+        | map(attribute='metadata.name')
+        | select('match', '^' + vm_name + '([.]|$)')
+        | list
+        | first
+        | default(vm_name)
+      }}
+
+- name: "LO-03 | Remove stale node object {{ _stale_node_fqdn }} (if present)"
+  kubernetes.core.k8s:
+    api_version: v1
+    kind: Node
+    name: "{{ _stale_node_fqdn }}"
+    state: absent
+
+# ── DataVolume first — VM will not start until DV is ready ───────────────────
+
+# ── Build definitions as facts to avoid Ansible 2.9 'resources' key collision ─
+
+- name: "LO-03 | Build DataVolume definition for {{ vm_name }}"
+  ansible.builtin.set_fact:
+    _worker_dv_definition: >-
+      {{
+        {
+          'apiVersion': 'cdi.kubevirt.io/v1beta1',
+          'kind': 'DataVolume',
+          'metadata': {
+            'name': vm_dv_name,
+            'namespace': provider.namespace,
+            'labels': {
+              'app': 'worker-vm',
+              'hci-integration.openshift.io/managed-by': 'hci-consumer-operator',
+              'hci-integration.openshift.io/consumer': ansible_operator_meta.name
+            }
+          },
+          'spec': {
+            'pvc': {
+              'accessModes': ['ReadWriteOnce'],
+              'resources': {'requests': {'storage': _worker_res.storage}},
+              'storageClassName': 'ocs-storagecluster-ceph-rbd-virtualization',
+              'volumeMode': 'Block'
+            },
+            'source': {'blank': {}}
+          }
+        }
+      }}
+
+- name: "LO-03 | Create DataVolume for {{ vm_name }}"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ hci_kubeconfig_file.path }}"
+    state: present
+    definition: "{{ _worker_dv_definition }}"
+
+# ── VirtualMachine ────────────────────────────────────────────────────────────
+
+- name: "LO-03 | Build VirtualMachine definition for {{ vm_name }}"
+  ansible.builtin.set_fact:
+    _worker_vm_definition: >-
+      {{
+        {
+          'apiVersion': 'kubevirt.io/v1',
+          'kind': 'VirtualMachine',
+          'metadata': {
+            'name': vm_name,
+            'namespace': provider.namespace,
+            'labels': {
+              'app': 'worker-vm',
+              'role': 'worker',
+              'hci-integration.openshift.io/managed-by': 'hci-consumer-operator',
+              'hci-integration.openshift.io/consumer': ansible_operator_meta.name
+            }
+          },
+          'spec': {
+            'running': true,
+            'template': {
+              'metadata': {
+                'labels': {'kubevirt.io/vm': vm_name, 'app': 'worker-vm'},
+                'annotations': {
+                  'k8s.v1.cni.cncf.io/networks': '[{"name":"router-internal-network","interface":"internal"}]'
+                }
+              },
+              'spec': {
+                'domain': {
+                  'cpu': {
+                    'cores': _worker_res.cpu | int,
+                    'sockets': 1,
+                    'threads': 1
+                  },
+                  'devices': {
+                    'disks': [
+                      {'disk': {'bus': 'virtio'}, 'name': 'rootdisk', 'bootOrder': 2}
+                    ],
+                    'interfaces': [
+                      {'name': 'default', 'masquerade': {}, 'bootOrder': 3},
+                      {'name': 'internal', 'bridge': {}, 'bootOrder': 1, 'macAddress': vm_mac}
+                    ],
+                    'networkInterfaceMultiqueue': true
+                  },
+                  'machine': {'type': 'q35'},
+                  'resources': {'requests': {'memory': _worker_res.memory}}
+                },
+                'networks': [
+                  {'name': 'default', 'pod': {}},
+                  {'name': 'internal', 'multus': {'networkName': 'router-internal-network'}}
+                ],
+                'volumes': [
+                  {'dataVolume': {'name': vm_dv_name}, 'name': 'rootdisk'}
+                ]
+              }
+            }
+          }
+        }
+      }}
+
+- name: "LO-03 | Create VirtualMachine {{ vm_name }}"
+  kubernetes.core.k8s:
+    kubeconfig: "{{ hci_kubeconfig_file.path }}"
+    state: present
+    definition: "{{ _worker_vm_definition }}"
+
+- name: "LO-03 | VM {{ vm_name }} created successfully"
+  ansible.builtin.debug:
+    msg: >-
+      VM {{ vm_name }} created in {{ provider.namespace }} on provider cluster.
+      Waiting for PXE boot → node join → CSR approval (hci-node-manager).

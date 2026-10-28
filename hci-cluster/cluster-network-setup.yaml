@@ -1,0 +1,40 @@
+---
+# Cluster-Admin Setup for HCI Workers
+# This manifest should be applied once by a cluster administrator
+# It creates the ClusterUserDefinedNetwork that can be used by multiple namespaces
+
+apiVersion: k8s.ovn.org/v1
+kind: ClusterUserDefinedNetwork
+metadata:
+  name: router-external-network
+  annotations:
+    description: "Shared external network for HCI gateway VMs across multiple namespaces"
+spec:
+  # Namespace selector - matches namespaces with the label hci-gateway-enabled=true
+  # Cluster admin can control which namespaces can use this network by labeling them
+  namespaceSelector:
+    matchLabels:
+      hci-gateway-enabled: "true"
+  network:
+    topology: Localnet
+    localnet:
+      physicalNetworkName: localnet1
+      role: Secondary
+      # No VLAN tagging by default
+      # vlan:
+      #   mode: Access
+      #   access:
+      #     id: 0
+      mtu: 1500
+      ipam:
+        mode: Disabled
+
+---
+# Example: Label namespaces to allow them to use the external network
+# Run these commands as cluster admin:
+#
+# kubectl label namespace main-cluster-workers hci-gateway-enabled=true
+# kubectl label namespace other-cluster-workers hci-gateway-enabled=true
+# kubectl label namespace <your-namespace> hci-gateway-enabled=true
+
+# Made with Bob

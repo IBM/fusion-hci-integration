@@ -1,0 +1,464 @@
+#cloud-config
+# Gateway VM cloud-init — rendered by the hci-provisioner operator (BS-04).
+#
+# Variables injected by step_gateway_vm.yml at render time:
+#   _gw_ssh_key              — SSH public key from 99-worker-ssh MachineConfig (admin key)
+#   _provisioner_ssh_public_key — SSH public key for operator automation (from hci-provisioner-ssh-key-* Secret)
+#   _gw_rhcos_stream         — OCP major.minor version (e.g. 4.22) for initial desired-version.txt
+#   _gw_external_mac         — <infrastructure.network.mac_prefix>:00:00:01
+#   _gw_internal_mac         — <infrastructure.network.mac_prefix>:00:00:02
+#   _gw_internal_ip          — infrastructure.network.internalSubnet network address + .1
+#   _gw_internal_prefix      — infrastructure.network.internalSubnet prefix length
+#   _gw_cluster_domain       — baseDomain from consumer cluster DNS/cluster CR
+#   _gw_worker_name_prefix   — consumer.workers.namePrefix from WorkerPool CR
+#   _gw_worker_start_ip      — infrastructure.network.internalSubnet network address + .10 (convention)
+#   _gw_max_pool_size        — provider.maxPoolSize from WorkerPool CR
+#   infrastructure.gateway.* — ip, prefix_length, default_router
+#   infrastructure.network.* — topology, mac_prefix, internal_subnet,
+#                              dns_server, internal_network, internal_gateway
+#
+# This template is baked into the operator image. Site-level customisation
+# (custom proxy, additional packages, etc.) can be applied directly on the
+# running VM via SSH — cloud-init runs once on first boot only.
+
+hostname: hci-gateway
+fqdn: hci-gateway.{{ provider_access.namespace }}.svc.cluster.local
+manage_etc_hosts: true
+
+users:
+  - name: core
+    sudo: ALL=(ALL) NOPASSWD:ALL
+    lock_passwd: true
+    ssh_authorized_keys:
+      - {{ _gw_ssh_key }}
+      - {{ _provisioner_ssh_public_key }}
+
+packages:
+  - firewalld
+  - iptables
+  - iptables-services
+  - dnsmasq
+  - syslinux-tftpboot
+  - ipxe-bootimgs
+  - nginx
+
+write_files:
+  # ── NetworkManager connections ───────────────────────────────────────────────
+
+  - path: /etc/NetworkManager/system-connections/pod-network.nmconnection
+    permissions: '0600'
+    content: |
+      [connection]
+      id=pod-network
+      type=ethernet
+      interface-name=eth0
+      autoconnect=true
+      [ipv4]
+      method=auto
+      never-default=true
+      ignore-auto-dns=true
+      [ipv6]
+      method=disabled
+
+  - path: /etc/NetworkManager/system-connections/external.nmconnection
+    permissions: '0600'
+    content: |
+      [connection]
+      id=external
+      type=ethernet
+      interface-name=eth1
+      autoconnect=true
+      [ethernet]
+      mac-address={{ _gw_external_mac }}
+      [ipv4]
+      method=manual
+      addresses={{ infrastructure.gateway.ip }}/{{ infrastructure.gateway.prefix_length | default(24) }}
+      gateway={{ infrastructure.gateway.default_router }}
+      dns={{ infrastructure.network.dns_server }}
+{% if infrastructure.network.topology == 'mediated' %}
+      route1={{ infrastructure.network.internal_network }},{{ infrastructure.network.internal_gateway }}
+{% endif %}
+      [ipv6]
+      method=disabled
+
+  - path: /etc/NetworkManager/system-connections/internal.nmconnection
+    permissions: '0600'
+    content: |
+      [connection]
+      id=internal
+      type=ethernet
+      interface-name=eth2
+      autoconnect=true
+      [ethernet]
+      mac-address={{ _gw_internal_mac }}
+      [ipv4]
+      method=manual
+      addresses={{ _gw_internal_ip }}/{{ _gw_internal_prefix }}
+      [ipv6]
+      method=disabled
+
+  # ── sysctl — IP forwarding ───────────────────────────────────────────────────
+
+  - path: /etc/sysctl.d/99-ip-forward.conf
+    content: |
+      net.ipv4.ip_forward=1
+      net.ipv4.conf.all.forwarding=1
+
+  # ── dnsmasq — DHCP + TFTP + iPXE chain-load ─────────────────────────────────
+  # Static-only DHCP pre-pool: one dhcp-host entry per possible worker index
+  # up to max_pool_size, using the same MAC formula as the hci-consumer operator:
+  #   MAC  : <mac_prefix>:00:00:<hex>   hex = 0x10 + (index - 1)
+  #   IP   : <internalSubnet network>.10, .11, ...
+  #   FQDN : <worker_name_prefix>-<index>.<cluster_domain>
+  #
+  # dhcp-range=...,static activates the DHCP server in static-only mode
+  # (no dynamic leases). dnsmasq will not open UDP/67 without this directive
+  # even when dhcp-host entries are present.
+
+  - path: /etc/dnsmasq.d/pxe.conf
+    permissions: '0644'
+    content: |
+      # Interface binding — only listen on internal (worker) network
+      interface=eth2
+      bind-interfaces
+
+      # DNS — forward all queries to external DNS (resolves cluster-internal names)
+      no-resolv
+      server={{ infrastructure.network.dns_server }}
+      no-poll
+
+      # Domain — DHCP option 15 sent automatically to all clients
+      domain={{ _gw_cluster_domain }}
+
+      # DHCP static-only mode (activates UDP/67 without dynamic range)
+      dhcp-range={{ infrastructure.network.internal_subnet | regex_replace('/.*$', '') }},static
+      dhcp-option=3,{{ _gw_internal_ip }}
+      dhcp-option=6,{{ infrastructure.network.dns_server }}
+
+      # TFTP + iPXE chain-load (BIOS mode)
+      enable-tftp
+      tftp-root={{ gateway_tftp_root }}
+      tftp-secure
+
+      # First PXE: serve undionly.kpxe (native PXE firmware)
+      # Once iPXE has loaded (option 175 present): serve HTTP boot script
+      dhcp-match=set:ipxe,175
+      dhcp-boot=tag:!ipxe,undionly.kpxe
+      dhcp-boot=tag:ipxe,http://{{ _gw_internal_ip }}/boot.ipxe
+
+      # Static MAC→IP→FQDN assignments for every possible worker index.
+      # Pre-provisioned so no gateway reconfiguration is needed when the
+      # operator scales workers up or down within the pool limit.
+      #
+      # IP derivation: strip the last octet from _gw_worker_start_ip via
+      # regex_replace (same pattern used in step_gateway_vm.yml) — avoids
+      # list index subscript which fails in the ansible-runner Jinja2 env.
+{% set _ip_3oct = _gw_worker_start_ip | regex_replace('[.][0-9]+$', '') %}
+{% set _ip_base = _gw_worker_start_ip | regex_replace('^.*[.]', '') | int %}
+{% for i in range(_gw_max_pool_size | int) %}
+{% set index   = i + 1 %}
+{% set mac_hex = '%02x' | format(16 + i) %}
+{% set ip      = _ip_3oct + '.' + ((_ip_base + i) | string) %}
+      dhcp-host={{ infrastructure.network.mac_prefix }}:00:00:{{ mac_hex }},{{ ip }},set:host{{ index }}
+      dhcp-option=tag:host{{ index }},12,{{ _gw_worker_name_prefix }}-{{ index }}.{{ _gw_cluster_domain }}
+{% endfor %}
+
+      # Logging
+      log-dhcp
+      log-queries
+
+  # ── iPXE boot script ─────────────────────────────────────────────────────────
+  # Written to both TFTP root (served on first chain-load) and HTTP root
+  # (served thereafter via dhcp-boot=tag:ipxe URL). runcmd copies it across.
+  #
+  # Boot menu: default = local disk after 10 s timeout.
+  # Disk boot failure falls through to RHCOS install automatically.
+  # Kernel args: enp2s0 = internal NIC (DHCP), enp1s0 = pod network (off).
+
+  - path: {{ gateway_tftp_root }}/boot.ipxe
+    permissions: '0644'
+    content: |
+      #!ipxe
+
+      :menu
+      menu Worker VM Boot Menu
+      item --gap -- ----------------------------------------
+      item --key 1 local    1) Boot from local disk
+      item --key 2 install  2) Install RHCOS
+      item --gap -- ----------------------------------------
+      item --gap -- Timeout in 10 seconds...
+      choose --timeout 10000 --default local selected || goto local
+      goto ${selected}
+
+      :local
+      echo Booting from local disk...
+      sanboot --no-describe --drive 0x80 || goto disk_failed
+
+      :disk_failed
+      echo Disk boot failed - disk may be empty or not bootable
+      echo Automatically starting RHCOS installation...
+      sleep 3
+      goto install
+
+      :install
+      echo Installing RHCOS...
+      kernel http://{{ _gw_internal_ip }}/rhcos/rhcos-live-kernel ip=enp2s0:dhcp ip=enp1s0:off rd.neednet=1 coreos.inst.install_dev=/dev/vda coreos.live.rootfs_url=http://{{ _gw_internal_ip }}/rhcos/rhcos-live-rootfs.img coreos.inst.ignition_url=http://{{ _gw_internal_ip }}/rhcos/worker-hci.ign ignition.platform.id=metal coreos.inst.node-role.kubernetes.io/hci-vm= coreos.inst.karg=rd.multipath=0 coreos.inst.karg=ip=enp2s0:dhcp coreos.inst.karg=ip=enp1s0:off
+      initrd http://{{ _gw_internal_ip }}/rhcos/rhcos-live-initramfs.img
+      boot || goto failed
+
+      :failed
+      echo Boot failed!
+      sleep 5
+      goto menu
+
+  # ── nginx — HTTP server for RHCOS boot files and ignition ───────────────────
+
+  - path: /etc/nginx/conf.d/pxe.conf
+    permissions: '0644'
+    content: |
+      server {
+          listen 80;
+          server_name _;
+          root {{ gateway_http_root }};
+
+          location / {
+              autoindex on;
+              autoindex_exact_size off;
+              autoindex_localtime on;
+          }
+
+          # Enable range requests for resumable large file downloads
+          location ~* \.(iso|img|rpm)$ {
+              add_header Accept-Ranges bytes;
+          }
+      }
+
+  # ── Initial desired-version.txt ───────────────────────────────────────────────
+  # Baked in at cloud-init render time so rhcos-sync.timer starts the download
+  # on first boot without waiting for the HCIConsumer to write it via SSH.
+  # The HCIConsumer will overwrite this on its first reconcile if the version
+  # has moved on since gateway provisioning.
+{% if _gw_rhcos_stream != '' %}
+
+  - path: /var/www/html/rhcos/desired-version.txt
+    permissions: '0644'
+    content: |
+      {{ _gw_rhcos_stream }}
+
+{% endif %}
+
+  # ── RHCOS boot files script ───────────────────────────────────────────────────
+  # Invoked autonomously by the gateway's systemd timer (rhcos-sync.timer).
+  # Reads desired-version.txt (written by the hci-provisioner operator) and
+  # downloads the matching RHCOS files if current-version.txt differs or is absent.
+  #
+  # Transaction protocol:
+  #   - current-version.txt present and == desired-version.txt → nothing to do
+  #   - Download all three files under versioned names first (safe, reversible)
+  #   - Open critical section: cp desired-version.txt download-pending.txt
+  #                             rm current-version.txt   ← gate closes
+  #   - Update symlinks (gate closed throughout — consistent old or new, never mixed)
+  #   - Commit: mv download-pending.txt current-version.txt  ← gate opens atomically
+  #
+  # Any failure before the final mv leaves current-version.txt absent →
+  # HCIConsumer scale-up gate remains closed → timer retries on next tick.
+  # HTTP GET failure on either version file is also treated as "not ready" by
+  # the operator — non-200 response is the safe default.
+  #
+  # Cleanup: versioned files not matching current-version.txt are removed after
+  # a successful commit.
+
+  - path: /usr/local/bin/update-rhcos-bootfiles.sh
+    permissions: '0755'
+    content: |
+      #!/bin/bash
+      set -eo pipefail
+      RHCOS_DIR="{{ gateway_http_root }}/rhcos"
+      DESIRED_FILE="${RHCOS_DIR}/desired-version.txt"
+      CURRENT_FILE="${RHCOS_DIR}/current-version.txt"
+      PENDING_FILE="${RHCOS_DIR}/download-pending.txt"
+
+      # ── Read desired version ────────────────────────────────────────────────
+      [ -f "${DESIRED_FILE}" ] || { echo "No desired-version.txt — nothing to do."; exit 0; }
+      RHCOS_STREAM="$(cat "${DESIRED_FILE}" | tr -d '[:space:]')"
+
+      if ! [[ "${RHCOS_STREAM}" =~ ^[0-9]+\.[0-9]+$ ]]; then
+        echo "ERROR: desired-version.txt must contain major.minor (e.g. 4.22), got: ${RHCOS_STREAM}"; exit 1
+      fi
+
+      # Download the GA release for this stream: major.minor.0
+      RHCOS_VERSION="${RHCOS_STREAM}.0"
+
+      # ── Check if already current ────────────────────────────────────────────
+      # Compare using RHCOS_STREAM (major.minor) — both version files use this.
+      if [ -f "${CURRENT_FILE}" ]; then
+        CURRENT_VERSION="$(cat "${CURRENT_FILE}" | tr -d '[:space:]')"
+        if [ "${CURRENT_VERSION}" = "${RHCOS_STREAM}" ]; then
+          echo "Bootfiles already at ${RHCOS_STREAM} — nothing to do."
+          exit 0
+        fi
+        echo "Version drift: current=${CURRENT_VERSION} desired=${RHCOS_STREAM} — updating."
+      else
+        echo "No current-version.txt — fresh download of ${RHCOS_STREAM} (${RHCOS_VERSION})."
+      fi
+
+      # ── Phase 1: download to versioned names ───────────────────────────────
+      BASE_URL="https://mirror.openshift.com/pub/openshift-v4/x86_64/dependencies/rhcos/${RHCOS_VERSION%.*}/${RHCOS_VERSION}"
+      KERNEL_FILE="rhcos-${RHCOS_VERSION}-x86_64-live-kernel.x86_64"
+      INITRAMFS_FILE="rhcos-${RHCOS_VERSION}-x86_64-live-initramfs.x86_64.img"
+      ROOTFS_FILE="rhcos-${RHCOS_VERSION}-x86_64-live-rootfs.x86_64.img"
+
+      mkdir -p "${RHCOS_DIR}"
+      for f in "${KERNEL_FILE}" "${INITRAMFS_FILE}" "${ROOTFS_FILE}"; do
+        if [ ! -f "${RHCOS_DIR}/${f}" ]; then
+          echo "Downloading ${f}..."
+          curl -L -f --progress-bar -o "${RHCOS_DIR}/${f}" "${BASE_URL}/${f}"
+        else
+          echo "Already present: ${f}"
+        fi
+      done
+
+      # ── Phase 2: fix ownership + SELinux before commit ─────────────────────
+      chown nginx:nginx "${RHCOS_DIR}/${KERNEL_FILE}" \
+                        "${RHCOS_DIR}/${INITRAMFS_FILE}" \
+                        "${RHCOS_DIR}/${ROOTFS_FILE}"
+      chmod 644 "${RHCOS_DIR}/${KERNEL_FILE}" \
+                "${RHCOS_DIR}/${INITRAMFS_FILE}" \
+                "${RHCOS_DIR}/${ROOTFS_FILE}"
+      restorecon "${RHCOS_DIR}/${KERNEL_FILE}" \
+                 "${RHCOS_DIR}/${INITRAMFS_FILE}" \
+                 "${RHCOS_DIR}/${ROOTFS_FILE}"
+
+      # ── Phase 3: commit ─────────────────────────────────────────────────────
+      # Prepare commit token (major.minor) before touching anything live.
+      echo "${RHCOS_STREAM}" > "${PENDING_FILE}"
+
+      # Open critical section — gate closes here (current-version.txt absent).
+      rm -f "${CURRENT_FILE}"
+
+      # Update symlinks — consistent old or new files, never mixed, gate closed.
+      ln -sf "${KERNEL_FILE}"    "${RHCOS_DIR}/rhcos-live-kernel"
+      ln -sf "${INITRAMFS_FILE}" "${RHCOS_DIR}/rhcos-live-initramfs.img"
+      ln -sf "${ROOTFS_FILE}"    "${RHCOS_DIR}/rhcos-live-rootfs.img"
+
+      # Atomic commit — gate opens with symlinks already consistent.
+      mv "${PENDING_FILE}" "${CURRENT_FILE}"
+      chown nginx:nginx "${CURRENT_FILE}"
+      restorecon "${CURRENT_FILE}"
+
+      echo "RHCOS ${RHCOS_STREAM} (${RHCOS_VERSION}) committed at http://{{ _gw_internal_ip }}/rhcos/"
+
+      # ── Phase 4: cleanup old versioned files ───────────────────────────────
+      echo "Cleaning up old versioned files..."
+      find "${RHCOS_DIR}" -maxdepth 1 -type f -name 'rhcos-*' \
+        ! -name "rhcos-${RHCOS_VERSION}-*" \
+        -delete && echo "Cleanup done." || echo "Cleanup error (non-fatal)."
+
+  # ── RHCOS sync systemd units ──────────────────────────────────────────────────
+  # rhcos-sync.service: runs update-rhcos-bootfiles.sh as root (needs sudo for
+  # ln/mv/restorecon in nginx-owned directory).
+  # rhcos-sync.timer: fires 2 min after boot (network settled) then every 5 min.
+  # The script exits immediately if desired-version.txt is absent or
+  # current-version.txt already matches — steady-state overhead is negligible.
+
+  - path: /etc/systemd/system/rhcos-sync.service
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=RHCOS bootfiles sync (desired-version.txt -> current-version.txt)
+      After=network-online.target
+      Wants=network-online.target
+
+      [Service]
+      Type=oneshot
+      User=root
+      ExecStart=/usr/local/bin/update-rhcos-bootfiles.sh
+      StandardOutput=journal
+      StandardError=journal
+
+  - path: /etc/systemd/system/rhcos-sync.timer
+    permissions: '0644'
+    content: |
+      [Unit]
+      Description=Periodic RHCOS bootfiles sync
+      After=network-online.target
+
+      [Timer]
+      OnBootSec=2min
+      OnUnitActiveSec=5min
+      Unit=rhcos-sync.service
+
+      [Install]
+      WantedBy=timers.target
+
+runcmd:
+  # ── Ensure packages are installed ────────────────────────────────────────────
+  # Runs first — before networking and firewall configuration — so that all
+  # packages are in their final installed state before any configuration is
+  # applied. If the packages: stage above failed silently (e.g. repos unreachable
+  # during cloud-init's early network stage), this guarantees they are present
+  # before firewall-cmd and service units are configured. Running dnf AFTER
+  # firewall-cmd --permanent would cause a firewalld reinstall to wipe the
+  # permanent rules directory, leaving the gateway with no NAT rules after reboot.
+  - dnf install -y nginx dnsmasq syslinux-tftpboot ipxe-bootimgs firewalld iptables iptables-services
+
+  # ── Networking ────────────────────────────────────────────────────────────────
+  - nmcli connection reload
+  - nmcli connection up pod-network
+  - nmcli connection up external
+  - nmcli connection up internal
+  - ip route del default dev eth0 || true
+  - sysctl -p /etc/sysctl.d/99-ip-forward.conf
+
+  # ── Firewall — zones, forwarding, masquerade ──────────────────────────────────
+  - systemctl enable firewalld
+  - systemctl start firewalld
+  - firewall-cmd --permanent --zone=external --add-interface=eth1
+  - firewall-cmd --permanent --zone=internal --add-interface=eth2
+  - firewall-cmd --permanent --zone=external --set-target=ACCEPT
+  - firewall-cmd --permanent --zone=internal --set-target=ACCEPT
+  - firewall-cmd --permanent --zone=external --remove-masquerade || true
+  - firewall-cmd --permanent --direct --add-rule ipv4 filter FORWARD 0 -i eth2 -o eth1 -j ACCEPT
+  - firewall-cmd --permanent --direct --add-rule ipv4 filter FORWARD 0 -i eth1 -o eth2 -j ACCEPT
+  # Always: suppress masquerade for the external (eth1) network so worker traffic
+  # to the s390x infrastructure reaches its destination with the original source IP.
+  # infrastructure.gateway.ip/prefix_length — iptables normalises away any host bits.
+  - firewall-cmd --permanent --direct --add-rule ipv4 nat POSTROUTING 0 -s {{ infrastructure.network.internal_subnet }} -d {{ infrastructure.gateway.ip }}/{{ infrastructure.gateway.prefix_length }} -j ACCEPT
+{% if infrastructure.network.topology == 'mediated' %}
+  # Mediated only: also suppress masquerade for the linuxone network
+  # (transparent routing — worker VMs appear with their own IPs to s390x nodes)
+  - firewall-cmd --permanent --direct --add-rule ipv4 nat POSTROUTING 0 -s {{ infrastructure.network.internal_subnet }} -d {{ infrastructure.network.internal_network }} -j ACCEPT
+{% endif %}
+  # Masquerade all remaining outbound traffic from internal subnet via eth1
+  - firewall-cmd --permanent --direct --add-rule ipv4 nat POSTROUTING 1 -s {{ infrastructure.network.internal_subnet }} -o eth1 -j MASQUERADE
+  # Allow services
+  - firewall-cmd --permanent --zone=internal --add-service=dhcp
+  - firewall-cmd --permanent --zone=internal --add-service=tftp
+  - firewall-cmd --permanent --zone=internal --add-service=http
+  - firewall-cmd --permanent --zone=external --add-service=ssh
+  - firewall-cmd --permanent --zone=internal --add-service=ssh
+  - firewall-cmd --reload
+
+  # ── PXE infrastructure — directories, iPXE files, SELinux ────────────────────
+  - mkdir -p {{ gateway_tftp_root }}
+  - mkdir -p {{ gateway_http_root }}/rhcos
+  - cp /usr/share/ipxe/undionly.kpxe {{ gateway_tftp_root }}/
+  - cp {{ gateway_tftp_root }}/boot.ipxe {{ gateway_http_root }}/
+  - chmod -R 755 {{ gateway_tftp_root }}
+  - chown -R dnsmasq:dnsmasq {{ gateway_tftp_root }}
+  - chmod -R 755 {{ gateway_http_root }}
+  - chown -R nginx:nginx {{ gateway_http_root }}
+  # SELinux contexts (critical — dnsmasq-tftp will not serve without tftpdir_t)
+  - semanage fcontext -d "{{ gateway_tftp_root }}(/.*)?" 2>/dev/null || true
+  - semanage fcontext -a -t tftpdir_t "{{ gateway_tftp_root }}(/.*)?"; restorecon -Rv {{ gateway_tftp_root }}
+  - semanage fcontext -d "{{ gateway_http_root }}(/.*)?" 2>/dev/null || true
+  - semanage fcontext -a -t httpd_sys_content_t "{{ gateway_http_root }}(/.*)?"; restorecon -Rv {{ gateway_http_root }}
+
+  # ── Services ──────────────────────────────────────────────────────────────────
+  - systemctl enable nginx
+  - systemctl start nginx
+  - systemctl enable dnsmasq
+  - systemctl start dnsmasq
+  - systemctl daemon-reload
+  - systemctl enable rhcos-sync.timer
+  - systemctl start rhcos-sync.timer

@@ -1,0 +1,177 @@
+# integration-setup.yaml
+# ─────────────────────────────────────────────────────────────────────────────
+# Cluster-pair integration configuration (example — copy and adapt).
+#
+# One file per main cluster (s390x/LinuxONE). In a real deployment this lives
+# in the cluster's Ansible inventory directory alongside the Ansible inventory
+# and group_vars/.
+#
+# This is the ONLY configuration input. generate-setup derives everything else
+# from it, including the initial WorkerPool CR (gateway only, workers.count: 0).
+# Scale workers afterwards with `oc edit workerpool`.
+#
+# Usage:
+#   ./generate-setup workspace/integration-setup.yaml
+#       → writes operator/build/config.env
+#       → writes setup_env.sh (generated, not hand-edited)
+#       → writes main-cluster/configuration/overlays/<topology>/
+#       → writes workspace/workerpool-hci-workers.yaml
+#       → writes workspace/<domain>.zone
+#       → writes workspace/<subnet>.in-addr.arpa.zone
+#
+# Then: make apply-buildconfigs && make build && make deploy
+#       oc apply -f workspace/workerpool-hci-workers.yaml   # then: oc edit workerpool hci-workers
+#
+# Section ownership (two-admin handover):
+#   provider.*  — values supplied by the HCI admin
+#   consumer.*  — values supplied by the main cluster (s390x/LinuxONE) admin
+# ─────────────────────────────────────────────────────────────────────────────
+
+# ── Consumer cluster (s390x / LinuxONE) ──────────────────────────────────────
+consumer:
+  # kubectl context name for this cluster (created by oc login).
+  # Find with: oc config get-contexts
+  context: main-cluster
+
+  # Base domain of the OpenShift cluster — used by scripts to construct
+  # api-int and MCS URLs.
+  # Find with: oc get dns cluster -o jsonpath='{.spec.baseDomain}'
+  domain: cluster.example.com
+
+  # Namespace where the hci-consumer and hci-provisioner operators are deployed.
+  # Becomes OPERATOR_NAMESPACE in build/config.env, the kustomize namespace,
+  # and metadata.namespace of the WorkerPool CR.
+  operatorNamespace: hci-node-manager
+
+  # Bastion host for this cluster.
+  # Required for: mediated topology (scripts 01-add-route.sh, 02-firewall-setup.sh)
+  #               cross-cluster registry model (setup-registry-proxy.sh).
+  # Can be omitted when topology is direct and registry model is local-s2i.
+  bastion:
+    host: bastion.cluster.example.com   # defaults to bastion.<domain>; override if different
+    user: root
+
+  # Name of the MachineConfigPool prepared on this cluster for HCI worker VMs.
+  # Optional, default: hci-vm
+  # machineConfigPool: hci-vm
+
+  networking:
+    # direct:   HCI physical network is routed to the main cluster network
+    #           (L2 adjacency or explicit static routes on main cluster nodes).
+    # mediated: main cluster reaches HCI via an intermediate host-side network
+    #           (OSA/HiperSockets on s390x); bastion provides the NAT bridge.
+    # Optional, default: direct
+    topology: mediated
+
+    # DNS server that resolves main cluster-internal names (api-int, node FQDNs,
+    # MCS endpoint). The gateway VM's dnsmasq forwards all non-local queries here
+    # so worker VMs can complete ignition and join the cluster.
+    # Typically the main cluster bastion.
+    dnsServer: 172.16.0.1
+
+    # Required for mediated topology only.
+    # The main cluster's internal network reachable via internalGateway.
+    internalNetwork: 10.0.0.0/24
+
+    # Required for mediated topology only.
+    # Gateway on the HCI physical network side that leads to internalNetwork.
+    internalGateway: 172.16.0.1
+
+  workers:
+    # Prefix for VM names on HCI and node names in the main cluster
+    # (worker-x86-1, worker-x86-2, ...). Also used for the generated DNS zones.
+    # Optional, default: worker-x86
+    # namePrefix: worker-x86
+
+    # Per-worker VM resources. Optional; operator defaults apply (4 vCPU, 8Gi, 50Gi).
+    # resources: {cpu: 4, memory: 8Gi, storage: 50Gi}
+
+# ── Provider cluster (x86 / Fusion HCI) ──────────────────────────────────────
+provider:
+  # kubectl context name for the HCI cluster.
+  # Find with: oc config get-contexts
+  context: hci-cluster
+
+  # API endpoint of the HCI cluster — becomes spec.provider.apiEndpoint.
+  # The same HCI cluster can serve multiple main clusters simultaneously.
+  apiEndpoint: https://api.hci.example.com:6443
+
+  # HCI cluster image registry public route — used only by the cross-cluster
+  # registry model to configure the bastion HAProxy backend.
+  # Find with: oc get route default-route -n openshift-image-registry -o jsonpath='{.spec.host}'
+  registryHostname: default-route-openshift-image-registry.apps.hci.example.com
+
+  # Namespace on the HCI cluster where all VMs for this pool are created.
+  # Must exist before setup-consumer-rbac.sh runs. One namespace per main
+  # cluster connecting to this HCI cluster.
+  namespace: main-cluster-workers
+
+  # Maximum number of worker VMs the HCI admin has committed to host in
+  # provider.namespace. Also sizes the generated DNS zones.
+  # Optional, default: 10
+  maxPoolSize: 10
+
+  gateway:
+    # External interface IP of the gateway VM on the HCI cluster's physical
+    # network. Assigned by the HCI admin from the physical address space.
+    ip: 172.16.1.100
+
+    # Prefix length for gateway.ip (defines the external network CIDR).
+    prefixLength: 16
+
+    # Default route for the gateway external interface.
+    defaultRouter: 172.16.0.1
+
+    # VM resources. Optional; operator defaults apply (2 vCPU, 4Gi, 30Gi).
+    # resources: {cpu: 2, memory: 4Gi, storage: 30Gi}
+
+  networking:
+    # MAC address prefix for every VM created in this pool (gateway + workers).
+    # Must be unique per consumer namespace on the same HCI cluster.
+    # Use a different prefix for each main cluster connecting to this HCI:
+    #   pool 1 (main-cluster-workers):   52:54:01
+    #   pool 2 (other-cluster-workers):  52:54:02
+    # Optional, default: "52:54:00"
+    macPrefix: "52:54:01"
+
+    # Private subnet for the gateway internal interface and all worker VMs.
+    #   gateway internal IP = network address + .1
+    #   worker start IP     = network address + .10
+    internalSubnet: 192.168.100.0/24
+
+# ── Image registry ────────────────────────────────────────────────────────────
+# Determines how operator images are built and where they are pulled from.
+# Drives BUILD_OVERLAY selection and REGISTRY_* variables in build/config.env.
+#
+# model: local-s2i      Images built and stored on the main cluster.
+#                       No bastion or HCI registry involvement.
+#                       Requires: nothing beyond oc login to main cluster.
+#
+# model: cross-cluster  Images built on the main cluster, pushed to the HCI
+#                       cluster's registry via a bastion HAProxy proxy.
+#                       Requires: bastion configured, setup-registry-proxy.sh run.
+#
+# model: external       Images pulled from an external registry (quay.io, etc.).
+#                       Build happens outside this workflow (CI/CD, developer machine).
+#                       Requires: pull secret pre-created on main cluster.
+#
+registry:
+  model: cross-cluster
+
+  # ── cross-cluster model only ─────────────────────────────────────────────
+  # HAProxy listen port on bastion for the registry proxy.
+  # Becomes REGISTRY_PROXY_PORT; push/pull URL is bastion.host:proxyPort.
+  proxyPort: 5443
+
+  # ServiceAccount created on the HCI cluster (in the per-pool HCI namespace)
+  # by setup-consumer-rbac.sh. Its token is read back by setup-registry-access.sh.
+  saName: registry-pusher
+
+  # Name of the docker-registry Secret created in operatorNamespace on the
+  # main cluster. Consumed by build/config.env (REGISTRY_SECRET_NAME)
+  # and referenced in the kustomize imagePullSecrets patch.
+  secretName: hci-registry-push
+
+  # ── external model only ───────────────────────────────────────────────────
+  # repository: quay.io/myorg/hci-integration
+  # pullSecretName: quay-pull-secret

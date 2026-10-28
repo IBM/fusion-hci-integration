@@ -1,78 +1,233 @@
-<!-- This should be the location of the title of the repository, normally the short name -->
-# repo-template
+# Fusion HCI Multi-Architecture Integration
 
-<!-- Build Status, is a great thing to have at the top of your repository, it shows that you take your CI/CD as first class citizens -->
-<!-- [![Build Status](https://travis-ci.org/jjasghar/ibm-cloud-cli.svg?branch=master)](https://travis-ci.org/jjasghar/ibm-cloud-cli) -->
+[![Documentation](https://img.shields.io/badge/docs-mkdocs-blue)](https://pages.github.com/IBM/fusion-hci-integration/)
+[![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
-<!-- Not always needed, but a scope helps the user understand in a short sentance like below, why this repo exists -->
-## Scope
+Integration solution for adding Fusion HCI x86 worker nodes to s390x/LinuxONE OpenShift clusters, enabling true multi-architecture workload deployment.
 
-The purpose of this project is to provide a template for new open source repositories.
+## Overview
 
-<!-- A more detailed Usage or detailed explaination of the repository here -->
-## Usage
+This project enables **multi-architecture OpenShift clusters** by integrating Fusion HCI (x86) as a compute provider for s390x/LinuxONE-based OpenShift clusters. Worker VMs running on Fusion HCI join the main cluster as x86 worker nodes, allowing workloads to be scheduled across both architectures.
 
-This repository contains some example best practices for open source repositories:
+### Key Features
 
-* [LICENSE](LICENSE)
-* [README.md](README.md)
-* [CONTRIBUTING.md](CONTRIBUTING.md)
-* [MAINTAINERS.md](MAINTAINERS.md)
-* [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md)
-<!-- A Changelog allows you to track major changes and things that happen, https://github.com/github-changelog-generator/github-changelog-generator can help automate the process -->
-* [CHANGELOG.md](CHANGELOG.md)
+- ✅ **Multi-Architecture Support**: Run x86 and s390x workloads in a single cluster
+- ✅ **Network Integration**: Transparent networking via OVN-Kubernetes
+- ✅ **Automated Provisioning**: Operator-driven VM deployment (`WorkerPool` CR) with PXE boot
+- ✅ **Flexible Deployment**: Supports both private (z/VM) and public (KVM) network topologies
+- ✅ **Production Ready**: Comprehensive documentation and troubleshooting guides
+- ✅ **Future-Proof**: Operator roadmap for automated lifecycle management
 
-> These are optional
+## Architecture
 
-<!-- The following are OPTIONAL, but strongly suggested to have in your repository. -->
-* [dco.yml](.github/dco.yml) - This enables DCO bot for you, please take a look https://github.com/probot/dco for more details.
-* [travis.yml](.travis.yml) - This is a example `.travis.yml`, please take a look https://docs.travis-ci.com/user/tutorial/ for more details.
+```
+┌─────────────────────────────────────────────────────────────┐
+│ Main Cluster (s390x/LinuxONE)                               │
+│  ┌──────────────┐  ┌──────────────┐  ┌──────────────┐      │
+│  │ Control Plane│  │ s390x Worker │  │ s390x Worker │      │
+│  └──────────────┘  └──────────────┘  └──────────────┘      │
+│                            │                                │
+│                    ┌───────▼────────┐                       │
+│                    │ Bastion Node   │                       │
+│                    └───────┬────────┘                       │
+└────────────────────────────┼──────────────────────────────┘
+                             │
+                    ┌────────▼─────────┐
+                    │   Gateway VM     │ (Routing, DHCP, PXE)
+                    └────────┬─────────┘
+                             │
+              ┌──────────────┴──────────────┐
+              │                             │
+      ┌───────▼────────┐           ┌───────▼────────┐
+      │  x86 Worker 1  │           │  x86 Worker 2  │
+      │  (Fusion HCI)  │           │  (Fusion HCI)  │
+      └────────────────┘           └────────────────┘
+```
 
-These may be copied into a new or existing project to make it easier for developers not on a project team to collaborate.
+### Components
 
-<!-- A notes section is useful for anything that isn't covered in the Usage or Scope. Like what we have below. -->
-## Notes
+- **Main Cluster**: s390x/LinuxONE OpenShift cluster (control plane + s390x workers)
+- **HCI Cluster**: Fusion HCI cluster providing x86 compute resources
+- **Gateway VM**: Bridges networks, provides DHCP/PXE services
+- **Worker VMs**: x86 RHCOS nodes that join the main cluster
 
-**NOTE: While this boilerplate project uses the Apache 2.0 license, when
-establishing a new repo using this template, please use the
-license that was approved for your project.**
+## Quick Start
 
-**NOTE: This repository has been configured with the [DCO bot](https://github.com/probot/dco).
-When you set up a new repository that uses the Apache license, you should
-use the DCO to manage contributions. The DCO bot will help enforce that.
-Please contact one of the IBM GH Org stewards.**
+### Prerequisites
 
-<!-- Questions can be useful but optional, this gives you a place to say, "This is how to contact this project maintainers or create PRs -->
-If you have any questions or issues you can create a new [issue here][issues].
+- OpenShift 4.14+ on s390x/LinuxONE (main cluster)
+- Fusion HCI cluster with OpenShift Virtualization
+- Network connectivity between clusters
+- Cluster-admin access on both clusters
 
-Pull requests are very welcome! Make sure your patches are well tested.
-Ideally create a topic branch for every separate change you make. For
-example:
+### Installation
 
-1. Fork the repo
-2. Create your feature branch (`git checkout -b my-new-feature`)
-3. Commit your changes (`git commit -am 'Added some feature'`)
-4. Push to the branch (`git push origin my-new-feature`)
-5. Create new Pull Request
+The steps below are a summary. See the [Getting Started Guide](docs/getting-started.md) for the full procedure.
+
+0. **Generate workspace configuration**
+   ```bash
+   mkdir -p workspace
+   cp templates/integration-setup.example.yaml workspace/integration-setup.yaml
+   # Edit workspace/integration-setup.yaml with your configuration
+   ./generate-setup workspace/integration-setup.yaml
+   source setup_env.sh
+   ```
+
+1. **Prepare Main Cluster**
+   ```bash
+   # Enable multi-architecture support
+   oc adm upgrade --to-multiarch
+   
+   # Apply MachineConfigs (choose variant: zvm or kvm)
+   oc apply -k main-cluster/configuration/overlays/mediated/
+   ```
+
+2. **Prepare HCI Cluster**
+   ```bash
+   # Apply cluster-scoped network configuration (cluster-admin)
+   oc apply -f hci-cluster/cluster-network-setup.yaml
+   
+   # Label namespace for HCI gateway
+   oc label namespace <your-namespace> hci-gateway-enabled=true
+   ```
+
+3. **Deploy the Operators and Gateway VM**
+   ```bash
+   # Build and deploy the operators (see docs/development/operator-build-deploy.md)
+   pushd operator && make apply-buildconfigs build install deploy && popd
+
+   # Apply the generated WorkerPool CR (workers.count: 0 provisions the gateway only)
+   oc apply -f workspace/workerpool-hci-workers.yaml
+   ```
+
+4. **Deploy Worker VMs**
+   ```bash
+   # After the pool is Ready, set spec.consumer.workers.count
+   oc -n ${MAIN_INTEGRATION_NAMESPACE} edit workerpool hci-workers
+   ```
+
+5. **Verify Integration**
+   ```bash
+   # Check worker nodes joined
+   oc get nodes -l node-role.kubernetes.io/worker
+   
+   # Verify multi-arch
+   oc get nodes -o wide
+   ```
+
+## Documentation
+
+Full documentation is available at [https://pages.github.com/IBM/fusion-hci-integration/](https://pages.github.com/IBM/fusion-hci-integration/)
+
+- [Getting Started Guide](docs/getting-started.md) - Step-by-step setup
+- [Prerequisites](docs/prerequisites.md) - Requirements and preparation
+- [Deployment Variants](docs/deployment-variants.md) - z/VM vs KVM topologies
+- [Architecture Overview](docs/architecture/architecture-overview.md) - System design
+- [Troubleshooting](docs/operations/troubleshooting.md) - Common issues
+
+### Build Documentation Locally
+
+```bash
+pip install mkdocs-material
+mkdocs serve
+# Open http://localhost:8000
+```
+
+## Repository Structure
+
+```
+fusion-hci-integration/          # Main source repo (this repo)
+├── docs/                        # MkDocs documentation source
+├── operator/                    # HCI operator (Ansible-based)
+├── hci-cluster/                 # Fusion HCI cluster admin setup (network, registry, RBAC)
+├── main-cluster/                # Main s390x cluster manifests
+├── templates/                   # CR and config templates
+│
+├── ops/                         # fusion-hci-ops repo (separate git, .gitignore'd)
+│   ├── docs/runbooks/           # Operational runbooks (own mkdocs site)
+│   └── scripts/                 # Operational scripts
+│
+└── wiki/                        # fusion-hci-integration.wiki repo (separate git, .gitignore'd)
+                                 # Incident post-mortems and operational knowledge
+```
+
+> **Note:** `ops/` and `wiki/` are separate git repositories checked out as subdirectories.
+> They are listed in `.gitignore` and are not part of this repo's commit history.
+> Runbooks in `ops/docs/runbooks/` are published by the ops repo's own mkdocs, not this site.
+> Wiki pages in `wiki/` are published to the GHE project wiki.
+
+## Deployment Variants
+
+### z/VM Variant (Private Network)
+- Main cluster nodes in private network
+- Bastion provides routing and DNS
+- Common in z/VM environments
+
+### KVM Variant (Public Network)
+- Main cluster nodes on shared network
+- Direct connectivity to HCI
+- Requires static route on master nodes
+
+See [Deployment Variants](docs/deployment-variants.md) for details.
+
+## Use Cases
+
+### Multi-Architecture Workloads
+Run applications that require both s390x and x86 architectures in a single cluster:
+- Legacy s390x applications alongside modern x86 microservices
+- CI/CD pipelines building for multiple architectures
+- Hybrid workloads leveraging strengths of each architecture
+
+### Capacity Expansion
+Add x86 compute capacity to s390x clusters:
+- Scale out with cost-effective x86 hardware
+- Maintain s390x for critical workloads
+- Flexible resource allocation
+
+### Development & Testing
+Test multi-architecture deployments:
+- Validate application portability
+- Test architecture-specific optimizations
+- Develop cross-platform solutions
+
+## Contributing
+
+Contributions are welcome! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+
+### Areas for Contribution
+- Documentation improvements
+- Bug fixes and enhancements
+- Additional deployment variants
+- Operator development (see [operator/README.md](operator/README.md))
+
+## Future Roadmap
+
+### Operator-Based Automation
+We're planning an Ansible-based operator for automated lifecycle management. See [operator/README.md](operator/README.md) for the vision and roadmap.
+
+### Additional Architectures
+The architecture is designed to support additional platforms:
+- ARM-based main clusters
+- Power-based main clusters
+- Additional HCI platforms
+
+## Support
+
+- **Documentation**: [https://pages.github.com/IBM/fusion-hci-integration/](https://pages.github.com/IBM/fusion-hci-integration/)
+- **Issues**: [GitHub Issues](https://github.com/IBM/fusion-hci-integration/issues)
+- **Discussions**: [GitHub Discussions](https://github.com/IBM/fusion-hci-integration/discussions)
 
 ## License
 
-All source files must include a Copyright and License header. The SPDX license header is 
-preferred because it can be easily scanned.
+Apache License 2.0 - See [LICENSE](LICENSE) for details.
 
-If you would like to see the detailed LICENSE click [here](LICENSE).
+## Acknowledgments
 
-```text
-#
-# Copyright IBM Corp. {Year project was created} - {Current Year}
-# SPDX-License-Identifier: Apache-2.0
-#
-```
-## Authors
+This project builds on OpenShift's multi-architecture capabilities and leverages:
+- OpenShift Virtualization
+- OVN-Kubernetes networking
+- Kustomize for configuration management
 
-Optionally, you may include a list of authors, though this is redundant with the built-in
-GitHub list of contributors.
+---
 
-- Author: New OpenSource IBMer <new-opensource-ibmer@ibm.com>
-
-[issues]: https://github.com/IBM/repo-template/issues/new
+**Status**: Alpha | **Version**: 0.2.0 | **Last Updated**: June 2026

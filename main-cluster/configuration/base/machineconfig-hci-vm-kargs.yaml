@@ -1,0 +1,22 @@
+apiVersion: machineconfiguration.openshift.io/v1
+kind: MachineConfig
+metadata:
+  name: 99-hci-vm-kargs
+  labels:
+    machineconfiguration.openshift.io/role: hci-vm
+    node-platform: hci-vm
+spec:
+  # Kernel arguments for HCI worker VMs (x86_64 virtual machines)
+  kernelArguments:
+    # Disable multipath for x86 virtual disk boot (not using s390x multipath storage)
+    - "root=/dev/disk/by-label/root"
+    - "rd.multipath=0"
+    - "rd.neednet=1"
+    # Network configuration - disable HCI Pod network interface
+    - "ip=enp1s0:off"
+    - "ip=enp2s0:dhcp"
+  config:
+    ignition:
+      version: 3.5.0
+
+# Made with Bob

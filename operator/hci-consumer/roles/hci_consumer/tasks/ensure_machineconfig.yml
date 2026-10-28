@@ -1,0 +1,256 @@
+---
+# ensure_machineconfig.yml — BS-02b
+#
+# Creates the MachineConfigPool and MachineConfig resources required for HCI
+# worker VMs on the consumer (main) cluster, if they do not already exist.
+#
+# Pattern: check existence with k8s_info first; only call k8s when absent.
+# This avoids any patch/update on existing resources — the operator truly
+# keeps its fingers off once created.
+#
+# No ownerReference, no teardown action.
+#
+# Variables (from WorkerPool CR via defaults/main.yml):
+#   consumer.machine_config_pool          — pool name (default: hci-vm)
+#   consumer.networking.topology          — direct | mediated
+#   provider.networking.internal_subnet   — e.g. 192.168.100.0/24
+#   provider.gateway.ip                   — e.g. 172.16.1.100
+
+# ── Convenience facts ─────────────────────────────────────────────────────────
+
+- name: "MC | Set name facts"
+  ansible.builtin.set_fact:
+    _mcp_name: "{{ consumer.machine_config_pool }}"
+    _mc_kargs_name: "99-{{ consumer.machine_config_pool }}-kargs"
+    _mc_is_direct: "{{ consumer.networking.topology == 'direct' }}"
+
+# ── kargs MachineConfig ───────────────────────────────────────────────────────
+# Create MachineConfigs BEFORE the MachineConfigPool so that MCO's initial render
+# immediately includes the required kernel arguments and network configuration.
+
+- name: "MC | Check kargs MachineConfig '{{ _mc_kargs_name }}' existence"
+  kubernetes.core.k8s_info:
+    api_version: machineconfiguration.openshift.io/v1
+    kind: MachineConfig
+    name: "{{ _mc_kargs_name }}"
+  register: _existing_mc_kargs
+
+- name: "MC | Create kargs MachineConfig '{{ _mc_kargs_name }}'"
+  when: _existing_mc_kargs.resources | length == 0
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: machineconfiguration.openshift.io/v1
+      kind: MachineConfig
+      metadata:
+        name: "{{ _mc_kargs_name }}"
+        labels:
+          machineconfiguration.openshift.io/role: "{{ _mcp_name }}"
+          node-platform: hci-vm
+      spec:
+        kernelArguments:
+          - "root=/dev/disk/by-label/root"
+          - "rd.multipath=0"
+          - "rd.neednet=1"
+          - "ip=enp1s0:off"
+          - "ip=enp2s0:dhcp"
+        config:
+          ignition:
+            version: 3.5.0
+
+# ── Routing MachineConfigs (direct topology only) ─────────────────────────────
+
+- name: "MC | Check worker routing MachineConfig existence (direct topology)"
+  when: _mc_is_direct | bool
+  kubernetes.core.k8s_info:
+    api_version: machineconfiguration.openshift.io/v1
+    kind: MachineConfig
+    name: "99-worker-s390x-hci-network-route"
+  register: _existing_mc_worker_route
+
+- name: "MC | Create worker routing MachineConfig (direct topology)"
+  when:
+    - _mc_is_direct | bool
+    - _existing_mc_worker_route.resources | length == 0
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: machineconfiguration.openshift.io/v1
+      kind: MachineConfig
+      metadata:
+        name: "99-worker-s390x-hci-network-route"
+        labels:
+          machineconfiguration.openshift.io/role: worker
+          node-platform: s390x
+      spec:
+        config:
+          ignition:
+            version: 3.5.0
+          systemd:
+            units:
+              - name: hci-network-route.service
+                enabled: true
+                contents: |
+                  [Unit]
+                  Description=Add static route to HCI worker network
+                  After=network-online.target
+                  Wants=network-online.target
+
+                  [Service]
+                  Type=oneshot
+                  RemainAfterExit=yes
+                  ExecStart=/bin/bash -c '/usr/sbin/ip route add {{ provider.networking.internal_subnet }} via {{ provider.gateway.ip }} || true'
+
+                  [Install]
+                  WantedBy=multi-user.target
+
+- name: "MC | Check master routing MachineConfig existence (direct topology)"
+  when: _mc_is_direct | bool
+  kubernetes.core.k8s_info:
+    api_version: machineconfiguration.openshift.io/v1
+    kind: MachineConfig
+    name: "99-master-s390x-hci-network-route"
+  register: _existing_mc_master_route
+
+- name: "MC | Create master routing MachineConfig (direct topology)"
+  when:
+    - _mc_is_direct | bool
+    - _existing_mc_master_route.resources | length == 0
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: machineconfiguration.openshift.io/v1
+      kind: MachineConfig
+      metadata:
+        name: "99-master-s390x-hci-network-route"
+        labels:
+          machineconfiguration.openshift.io/role: master
+      spec:
+        config:
+          ignition:
+            version: 3.5.0
+          systemd:
+            units:
+              - name: hci-network-route.service
+                enabled: true
+                contents: |
+                  [Unit]
+                  Description=Add static route to HCI worker network
+                  After=network-online.target ovs-configuration.service
+                  Wants=network-online.target
+                  Requires=ovs-configuration.service
+
+                  [Service]
+                  Type=oneshot
+                  RemainAfterExit=yes
+                  ExecStartPre=/bin/bash -c 'until ip link show br-ex; do sleep 1; done'
+                  ExecStart=/bin/bash -c '/usr/sbin/ip route add {{ provider.networking.internal_subnet }} via {{ provider.gateway.ip }} dev br-ex || true'
+
+                  [Install]
+                  WantedBy=multi-user.target
+
+# ── MachineConfigPool ─────────────────────────────────────────────────────────
+
+- name: "MC | Check MachineConfigPool '{{ _mcp_name }}' existence"
+  kubernetes.core.k8s_info:
+    api_version: machineconfiguration.openshift.io/v1
+    kind: MachineConfigPool
+    name: "{{ _mcp_name }}"
+  register: _existing_mcp
+
+- name: "MC | Create MachineConfigPool '{{ _mcp_name }}'"
+  when: _existing_mcp.resources | length == 0
+  kubernetes.core.k8s:
+    state: present
+    definition:
+      apiVersion: machineconfiguration.openshift.io/v1
+      kind: MachineConfigPool
+      metadata:
+        name: "{{ _mcp_name }}"
+        labels:
+          machineconfiguration.openshift.io/role: "{{ _mcp_name }}"
+      spec:
+        machineConfigSelector:
+          matchExpressions:
+            - key: machineconfiguration.openshift.io/role
+              operator: In
+              values:
+                - worker
+                - "{{ _mcp_name }}"
+            - key: node-platform
+              operator: NotIn
+              values:
+                - s390x
+        nodeSelector:
+          matchLabels: "{{ { ('node-role.kubernetes.io/' ~ _mcp_name): '' } }}"
+        paused: false
+        maxUnavailable: 1
+
+# ── Sync MCP status.configuration from spec.configuration (BS-02c) ────────────
+#
+# MCO only populates MachineConfigPool.status.configuration.name automatically once
+# a node joins the pool and reports ready. When readyMachineCount == 0 (e.g. before
+# first worker boots, or after cluster CA rotation / MC updates while scaled down),
+# MCO updates spec.configuration.name with the new render but leaves status.configuration.name
+# empty or stale. MCS serves status.configuration.name on /config/<pool>; if stale,
+# worker VMs cannot boot or fetch ignition.
+#
+# Fix: whenever the pool has 0 ready machines, keep status.configuration synced with
+# spec.configuration.name. Once readyMachineCount > 0, MCO manages status transitions
+# natively during rolling updates.
+#
+# The status subresource is patched via the Kubernetes REST API using the uri module
+# (kubernetes.core.k8s in the base image does not expose subresource parameter).
+
+- name: "MC | Re-fetch MachineConfigPool '{{ _mcp_name }}' for status sync"
+  kubernetes.core.k8s_info:
+    api_version: machineconfiguration.openshift.io/v1
+    kind: MachineConfigPool
+    name: "{{ _mcp_name }}"
+  register: _mcp_current
+
+- name: "MC | Set MCP render synchronization facts"
+  when: _mcp_current.resources | length > 0
+  ansible.builtin.set_fact:
+    _mcp_spec_render: "{{ (_mcp_current.resources | first).spec.configuration.name | default('') }}"
+    _mcp_status_render: "{{ (_mcp_current.resources | first).status.configuration.name | default('') }}"
+    _mcp_ready_machines: "{{ (_mcp_current.resources | first).status.readyMachineCount | default(0) | int }}"
+
+- name: "MC | Sync MCP status.configuration from spec.configuration via Kubernetes API"
+  when:
+    - _mcp_current.resources | length > 0
+    - _mcp_ready_machines | int == 0
+    - _mcp_spec_render != ''
+    - _mcp_status_render != _mcp_spec_render
+  ansible.builtin.uri:
+    url: "https://kubernetes.default.svc/apis/machineconfiguration.openshift.io/v1/machineconfigpools/{{ _mcp_name }}/status"
+    method: PATCH
+    headers:
+      Authorization: "Bearer {{ lookup('file', '/var/run/secrets/kubernetes.io/serviceaccount/token') }}"
+      Content-Type: "application/merge-patch+json"
+    body_format: json
+    body:
+      status:
+        configuration:
+          name: "{{ _mcp_spec_render }}"
+          source:
+            - apiVersion: "machineconfiguration.openshift.io/v1"
+              kind: MachineConfig
+              name: "{{ _mcp_spec_render }}"
+    validate_certs: false
+    status_code: [200, 201]
+
+- name: "MC | Log MCP status sync result"
+  when: _mcp_current.resources | length > 0
+  ansible.builtin.debug:
+    msg: >-
+      MCP '{{ _mcp_name }}' (readyMachines: {{ _mcp_ready_machines }}):
+      {%- if _mcp_ready_machines | int > 0 %}
+      pool has active nodes (readyMachines={{ _mcp_ready_machines }}) — status managed natively by OpenShift MCO.
+      {%- elif _mcp_spec_render == '' %}
+      MCO has not yet rendered spec.configuration.name — will retry on next reconcile.
+      {%- elif _mcp_status_render == _mcp_spec_render %}
+      status.configuration is up-to-date with spec ('{{ _mcp_status_render }}').
+      {%- else %}
+      status.configuration synced from '{{ _mcp_status_render }}' to desired spec '{{ _mcp_spec_render }}'.
+      {%- endif %}

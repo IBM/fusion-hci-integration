@@ -1,0 +1,19 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: openshift-machine-config-operator
+
+bases:
+  - ../../base
+
+resources:
+  - 99-master-s390x-hci-network-route.yaml
+  - 99-worker-s390x-hci-network-route.yaml
+
+# KVM variant adds routing for master and s390x worker nodes
+# for direct access to HCI internal network
+#
+# Master route: Required for cluster management (CSR approval, scheduling, etc.)
+# Worker route: Required for pod-to-pod communication across architectures
+
+# Made with Bob

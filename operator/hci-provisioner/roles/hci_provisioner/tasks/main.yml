@@ -1,0 +1,179 @@
+---
+# hci_provisioner role — main reconciliation entry point
+#
+# Reconciliation follows the same observe → diff → act pattern as the
+# hci_consumer role. The provisioner's job is to drive each bootstrap or
+# teardown step (a Kubernetes Job) to completion and report progress back
+# to the HCIProvisioning CR and the owning HCIConsumer CR.
+#
+# Flow:
+#   OBSERVE  observe_world.yml   — fetch CR status.steps + owned Job statuses
+#   DIFF     diff_steps.yml      — walk dependency graph; produce action lists
+#   ACT      advance_steps.yml   — patch step statuses, create/watch Jobs,
+#                                  patch HCIConsumer phase on completion
+#
+# The runner injects these variables automatically:
+#   ansible_operator_meta.name       — CR metadata.name
+#   ansible_operator_meta.namespace  — CR metadata.namespace
+
+- name: "Log WorkerPoolProvisioning reconcile start"
+  ansible.builtin.debug:
+    msg: >-
+      Reconciling WorkerPoolProvisioning '{{ ansible_operator_meta.name }}'
+      in namespace '{{ ansible_operator_meta.namespace }}'
+      | mode={{ mode }}
+      | topology={{ infrastructure.network.topology }}
+      | workerPool={{ worker_pool_ref }}
+
+# ── Gate: credentials Secret must exist before we touch anything ──────────────
+
+- name: "Verify provisioner credentials Secret exists"
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: "{{ provider_access.credentials_secret }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+  register: prov_creds_secret
+
+- name: "Set status condition: ProviderCredentialsMissing"
+  when: prov_creds_secret.resources | length == 0
+  operator_sdk.util.k8s_status:
+    api_version: hci-integration.openshift.io/v1alpha1
+    kind: WorkerPoolProvisioning
+    name: "{{ ansible_operator_meta.name }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+    status:
+      phase: "Failed"
+      conditions:
+        - type: "ProviderCredentialsReady"
+          status: "False"
+          reason: "SecretNotFound"
+          message: >-
+            Provisioner credentials Secret '{{ provider_access.credentials_secret }}'
+            not found in namespace '{{ ansible_operator_meta.namespace }}'.
+
+- name: "Abort reconcile — credentials Secret missing"
+  when: prov_creds_secret.resources | length == 0
+  ansible.builtin.fail:
+    msg: >-
+      Provisioner credentials Secret '{{ provider_access.credentials_secret }}' not found.
+      Reconcile aborted.
+
+# ── Gate: skip if phase is already terminal ───────────────────────────────────
+# Re-entrant safety: if a previous reconcile completed or failed we do not
+# re-run the step graph. A human must delete and recreate the CR to retry.
+
+- name: "Fetch current WorkerPoolProvisioning phase"
+  kubernetes.core.k8s_info:
+    api_version: hci-integration.openshift.io/v1alpha1
+    kind: WorkerPoolProvisioning
+    name: "{{ ansible_operator_meta.name }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+  register: current_cr
+
+- name: "Nothing to do — WorkerPoolProvisioning CR does not exist"
+  when: current_cr.resources | length == 0
+  ansible.builtin.debug:
+    msg: >-
+      WorkerPoolProvisioning CR '{{ ansible_operator_meta.name }}' not found in
+      namespace '{{ ansible_operator_meta.namespace }}'. Nothing to reconcile.
+
+- name: "End reconcile — CR does not exist"
+  when: current_cr.resources | length == 0
+  ansible.builtin.meta: end_play
+
+- name: "Set current_phase fact"
+  ansible.builtin.set_fact:
+    current_phase: "{{ (current_cr.resources | first).status.phase | default('Pending') }}"
+
+- name: "Log and skip — provisioning already in terminal phase"
+  when: current_phase in ['Complete', 'Failed']
+  ansible.builtin.debug:
+    msg: >-
+      WorkerPoolProvisioning '{{ ansible_operator_meta.name }}' is already in phase
+      '{{ current_phase }}'. Nothing to do.
+
+- name: "End reconcile — terminal phase"
+  when: current_phase in ['Complete', 'Failed']
+  ansible.builtin.meta: end_play
+
+# ── Ensure provisioner SSH keypair Secret exists (bootstrap only) ────────────
+# Generates an ed25519 keypair on first reconcile and stores the private key in
+# an operator-owned Secret (generateName). The actual Secret name is persisted
+# in status.sshKeySecret so it survives restarts. Idempotent — skips if the
+# Secret named in status already exists.
+# Produces: _provisioner_ssh_public_key, _provisioner_ssh_secret_name
+
+- name: "Ensure provisioner SSH keypair Secret (bootstrap only)"
+  when: mode == 'bootstrap'
+  ansible.builtin.include_tasks: ensure_provisioner_ssh_key.yml
+
+# ── Initialise status.steps if this is the first reconcile ───────────────────
+# The steps list is written once here so that subsequent reconciles always
+# have a stable set of entries to patch.
+
+- name: "Initialise status steps on first reconcile"
+  when: >-
+    (current_cr.resources | first).status.steps is not defined
+    or (current_cr.resources | first).status.steps | length == 0
+  block:
+
+    - name: "Reset initial step accumulator"
+      ansible.builtin.set_fact:
+        _initial_steps: []
+        # Steps with no teardown action — auto-completed on initialisation.
+        # Ignition: file lives on gateway VM being deleted; no separate cleanup needed.
+        # Credentials: not yet implemented; no teardown action.
+        _teardown_noop_steps:
+          - Ignition
+          - Credentials
+
+    - name: "Accumulate initial step entries"
+      ansible.builtin.set_fact:
+        _initial_steps: >-
+          {{
+            _initial_steps + [{
+              'name': item.name,
+              'status': 'Complete'
+                if (mode == 'teardown' and item.name in _teardown_noop_steps)
+                else 'Pending',
+              'message': 'No teardown action required — auto-completed.'
+                if (mode == 'teardown' and item.name in _teardown_noop_steps)
+                else omit
+            }]
+          }}
+      loop: "{{ bootstrap_steps if mode == 'bootstrap' else teardown_steps }}"
+      loop_control:
+        label: "{{ item.name }}"
+
+    - name: "Write initial status to WorkerPoolProvisioning"
+      operator_sdk.util.k8s_status:
+        api_version: hci-integration.openshift.io/v1alpha1
+        kind: WorkerPoolProvisioning
+        name: "{{ ansible_operator_meta.name }}"
+        namespace: "{{ ansible_operator_meta.namespace }}"
+        status:
+          phase: "Pending"
+          steps: "{{ _initial_steps }}"
+
+# ── OBSERVE ───────────────────────────────────────────────────────────────────
+# Gather step statuses and owned Job states.
+# Produces: step_statuses (dict name→status), job_statuses (dict name→phase)
+
+- name: "Observe world state"
+  ansible.builtin.include_tasks: observe_world.yml
+
+# ── DIFF ──────────────────────────────────────────────────────────────────────
+# Walk dependency graph against observed state.
+# Produces: steps_to_launch (list), steps_just_complete (list),
+#           steps_just_failed (list), all_complete (bool)
+
+- name: "Diff desired vs actual steps"
+  ansible.builtin.include_tasks: diff_steps.yml
+
+# ── ACT ───────────────────────────────────────────────────────────────────────
+# Patch step statuses, create Jobs for steps_to_launch,
+# advance HCIProvisioning phase, patch HCIConsumer phase on completion/failure.
+
+- name: "Advance step state machine"
+  ansible.builtin.include_tasks: advance_steps.yml

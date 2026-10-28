@@ -1,0 +1,302 @@
+---
+# observe_world.yml — gather ALL cluster state needed for reconciliation.
+#
+# This is the "sense" phase of the observe → diff → act loop.
+# Every API call in the reconcile lives here. No decisions are made.
+# No resources are created or deleted.
+#
+# Produced facts (consumed by diff_desired_actual.yml and status reporting):
+#
+#   hci_kubeconfig_file.path  — temp file with HCI kubeconfig (cleaned up in main.yml)
+#
+#   existing_vm_names         — set of VM names currently on HCI owned by this consumer
+#                               e.g. { "worker-x86-2", "worker-x86-3" }
+#
+#   existing_node_names       — set of node names on the main cluster that match
+#                               BOTH the name prefix AND carry the MCP role label
+#                               node-role.kubernetes.io/<machineConfigPool>.
+#                               Ownership fingerprint — excludes nodes from other
+#                               pools that share a similar name prefix.
+#                               e.g. { "worker-x86-1", "worker-x86-2" }
+#
+#   nodes_safe_to_delete      — subset of existing_node_names where ALL hold:
+#                                 • spec.unschedulable == true  (node is cordoned)
+#                                 • no non-DaemonSet pods remain  (drain complete)
+#                                 • annotation hci-integration.openshift.io/protected
+#                                   is absent or not "true"  (LO-10 protection gate)
+#                               After `oc adm drain --ignore-daemonsets` succeeds,
+#                               only DaemonSet pods remain — that is the drained
+#                               state.  A node not yet cordoned is never eligible
+#                               regardless of pod count.  A node carrying the
+#                               protected annotation is never eligible regardless
+#                               of cordon or drain state.
+#
+#   nodes_without_vm          — nodes that exist on LO side but have no corresponding
+#                               VM on HCI. Logged as drift; not acted on in MVP.
+#                               Hook for future reconciliation of HCI-side accidents.
+#
+#   vms_without_node          — VMs on HCI whose node object is absent from the main
+#                               cluster (VM running but node deleted, e.g. by LOOps).
+#                               Logged as drift; not acted on in MVP.
+
+# ── ① Load HCI kubeconfig ─────────────────────────────────────────────────────
+
+- name: "Observe | Read provider credentials Secret"
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: "{{ provider.credentials_secret }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+  register: _obs_creds_secret
+# Note: provider.credentials_secret maps from WorkerPool.spec.provider.credentialsSecret
+
+- name: "Observe | Decode kubeconfig"
+  ansible.builtin.set_fact:
+    hci_kubeconfig_content: "{{ _obs_creds_secret.resources[0].data.kubeconfig | b64decode }}"
+
+- name: "Observe | Write kubeconfig to temp file"
+  ansible.builtin.tempfile:
+    state: file
+    suffix: ".kubeconfig"
+  register: hci_kubeconfig_file
+
+- name: "Observe | Populate temp kubeconfig"
+  ansible.builtin.copy:
+    content: "{{ hci_kubeconfig_content }}"
+    dest: "{{ hci_kubeconfig_file.path }}"
+    mode: "0600"
+
+# ── ② HCI cluster: existing operator-owned VMs ───────────────────────────────
+
+- name: "Observe | List operator-owned VMs on provider cluster"
+  kubernetes.core.k8s_info:
+    api_version: kubevirt.io/v1
+    kind: VirtualMachine
+    namespace: "{{ provider.namespace }}"
+    label_selectors:
+      - "app=worker-vm"
+      - "role=worker"
+      - "hci-integration.openshift.io/consumer={{ ansible_operator_meta.name }}"
+    kubeconfig: "{{ hci_kubeconfig_file.path }}"
+  register: _obs_vms
+
+- name: "Observe | Build existing_vm_names set"
+  ansible.builtin.set_fact:
+    existing_vm_names: "{{ _obs_vms.resources | map(attribute='metadata.name') | list }}"
+
+# ── ③ Main cluster: nodes matching the name prefix ───────────────────────────
+#
+# We match by name prefix rather than a label so that nodes LOOps manages
+# (which may not carry our labels) are still detected.
+
+- name: "Observe | List nodes with matching name prefix"
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Node
+  register: _obs_all_nodes
+
+# Node ownership = name prefix AND MCP role label.
+# The role label key contains a slash so it cannot be addressed via selectattr
+# attribute path (same constraint as the protected annotation — see ④a below).
+# Use a loop accumulator instead.
+
+- name: "Observe | Initialise existing_node_names accumulator"
+  ansible.builtin.set_fact:
+    existing_node_names: []
+
+- name: "Observe | Accumulate nodes matching prefix + MCP role label"
+  ansible.builtin.set_fact:
+    existing_node_names: >-
+      {{
+        existing_node_names
+        | union([item.metadata.name | regex_replace('\..*$', '')])
+      }}
+  when:
+    - item.metadata.name is match('^' + consumer.workers.name_prefix + '-')
+    - item.metadata.labels is defined
+    - ('node-role.kubernetes.io/' + consumer.machine_config_pool) in item.metadata.labels
+  loop: "{{ _obs_all_nodes.resources }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+
+# ── ④ Main cluster: which nodes are safe to delete (LO-09 gate) ──────────────
+#
+# LOOps drain sequence:
+#   oc adm cordon <node>                              → sets spec.unschedulable=true
+#   oc adm drain  <node> --ignore-daemonsets ...      → evicts all non-DS pods,
+#                                                        returns when they are gone
+#
+# After a successful drain the node is cordoned and carries only DaemonSet pods
+# (kube-proxy, ovs-node, node-exporter, …).  That is the signal the operator
+# waits for before deleting the VM.
+#
+# Gate (BOTH required):
+#   1. spec.unschedulable == true   — LOOps has signalled intent to remove the node
+#   2. no non-DaemonSet pods        — drain has completed
+#
+# A pod is a DaemonSet pod when metadata.ownerReferences contains an entry with
+# kind == "DaemonSet".  All other pods — including pods with no ownerReferences
+# (bare pods) — count as workload pods and block deletion.
+#
+# MCP upgrade safety: surplus == 0 when workers.count is unchanged, so the
+# operator never acts on a temporarily-cordoned upgrade node. ✓
+#
+# Optimisation: if no matching node is cordoned, skip all Pod API calls entirely.
+# The pod listing loop only runs over cordoned nodes.
+
+# Identify cordoned nodes upfront — only these need a pod listing.
+# Same ownership filter as existing_node_names: prefix + MCP role label.
+- name: "Observe | Initialise _cordoned_nodes accumulator"
+  ansible.builtin.set_fact:
+    _cordoned_nodes: []
+
+- name: "Observe | Find cordoned nodes matching prefix + MCP role label"
+  ansible.builtin.set_fact:
+    _cordoned_nodes: "{{ _cordoned_nodes + [item] }}"
+  when:
+    - item.metadata.name is match('^' + consumer.workers.name_prefix + '-')
+    - item.metadata.labels is defined
+    - ('node-role.kubernetes.io/' + consumer.machine_config_pool) in item.metadata.labels
+    - item.spec.unschedulable | default(false) | bool
+  loop: "{{ _obs_all_nodes.resources }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+
+- name: "Observe | List pods on each cordoned node"
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Pod
+    field_selectors:
+      - "spec.nodeName={{ item.metadata.name }}"
+  register: _obs_node_pods
+  loop: "{{ _cordoned_nodes }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+
+# "System pod" = a pod whose ownerReferences consist entirely of kinds that
+# oc adm drain never evicts:
+#   • DaemonSet — DS controller recreates the pod immediately after eviction
+#   • Node      — node-infrastructure pods (e.g. kube-rbac-proxy-crio-*)
+#                 owned by the Node object itself
+# Any pod with no ownerReferences (bare pod) or with at least one non-system
+# ownerReference is treated as a workload pod and blocks deletion.
+#
+# Implementation: one set_fact per node result (not one per pod). For each
+# node result we check whether any pod in resources[] is a workload pod using
+# a pure Jinja2 expression. This avoids a subelements loop that produces one
+# Ansible task per pod — on a real node with 30–50 DaemonSet pods that
+# created significant reconcile latency.
+#
+# A pod is a workload pod when:
+#   ownerReferences is empty (bare pod), OR
+#   any ownerReference has a kind that is not DaemonSet or Node.
+# The test uses selectattr('kind', 'in', ...) to count system owners; if that
+# count < total owner count the pod has at least one non-system owner.
+
+- name: "Observe | Initialise workload-node accumulator"
+  ansible.builtin.set_fact:
+    _nodes_with_workload_pods: []
+
+# For each node result, evaluate the entire pod list in a single Jinja2 expression.
+# We build two flat counts:
+#   1. pods with NO ownerReferences at all (bare pods — always block)
+#   2. ownerReferences whose kind is NOT DaemonSet or Node (workload owners)
+# If either count > 0 the node has workload pods and blocks deletion.
+#
+# Filters used are all safe in Ansible 2.9 / Jinja2 2.10:
+#   selectattr, rejectattr, map(attribute=...), flatten, list, length
+# No zip, no subelements, no | first, no chained map-of-filters.
+- name: "Observe | Flag node blocked if any pod has non-system owner (or no owner)"
+  ansible.builtin.set_fact:
+    _nodes_with_workload_pods: >-
+      {{
+        _nodes_with_workload_pods | union(
+          [item.item.metadata.name | regex_replace('\..*$', '')]
+          if (
+            (item.resources | rejectattr('metadata.ownerReferences', 'defined') | list | length) > 0
+            or
+            (item.resources | selectattr('metadata.ownerReferences', 'defined')
+             | map(attribute='metadata.ownerReferences') | list | flatten
+             | rejectattr('kind', 'in', ['DaemonSet', 'Node']) | list | length) > 0
+          )
+          else []
+        )
+      }}
+  loop: "{{ _obs_node_pods.results }}"
+  loop_control:
+    label: "{{ item.item.metadata.name }}"
+
+- name: "Observe | Debug: drain state on cordoned nodes"
+  ansible.builtin.debug:
+    msg: >-
+      Cordoned: {{ _cordoned_nodes | map(attribute='metadata.name') | list }}
+      Still has workload pods: {{ _nodes_with_workload_pods }}
+
+# ── ④a Protected nodes (LO-10 gate) ─────────────────────────────────────────
+#
+# Any node carrying the annotation
+#   hci-integration.openshift.io/protected: "true"
+# is permanently ineligible for scale-down regardless of cordon / drain state.
+# LOOps or an admin sets this annotation before co-locating stateful local-
+# storage workloads on a node.  The operator never touches that node.
+#
+# IMPORTANT: selectattr() uses Jinja2 attribute-path notation and CANNOT
+# address dict keys containing dots or slashes (e.g. "hci-integration.openshift.io/protected").
+# Bracket notation selectattr('annotations["x.y/z"]', ...) is silently ignored
+# and returns an empty result.  Use a loop + when: condition instead, which
+# dereferences the dict directly via item.metadata.annotations['x.y/z'].
+
+- name: "Observe | Initialise protected-node accumulator"
+  ansible.builtin.set_fact:
+    _protected_node_names: []
+
+- name: "Observe | Flag node as protected if annotation is set to 'true'"
+  ansible.builtin.set_fact:
+    _protected_node_names: >-
+      {{ _protected_node_names | union([item.metadata.name | regex_replace('\..*$', '')]) }}
+  when:
+    - item.metadata.name is match('^' + consumer.workers.name_prefix + '-')
+    - item.metadata.annotations is defined
+    - item.metadata.annotations['hci-integration.openshift.io/protected'] | default('') == 'true'
+  loop: "{{ _obs_all_nodes.resources }}"
+  loop_control:
+    label: "{{ item.metadata.name }}"
+
+- name: "Observe | Build nodes_safe_to_delete (cordoned AND no workload pods AND not protected)"
+  ansible.builtin.set_fact:
+    nodes_safe_to_delete: >-
+      {{
+        _cordoned_nodes
+        | map(attribute='metadata.name')
+        | map('regex_replace', '\..*$', '')
+        | difference(_nodes_with_workload_pods)
+        | difference(_protected_node_names)
+        | list
+      }}
+
+- name: "Observe | Initialise nodes_safe_to_delete when no nodes are cordoned"
+  ansible.builtin.set_fact:
+    nodes_safe_to_delete: "{{ nodes_safe_to_delete | default([]) }}"
+
+# ── ⑤ Drift detection (observe only — not acted on in MVP) ───────────────────
+
+- name: "Observe | Detect nodes_without_vm (LO node exists, HCI VM absent)"
+  ansible.builtin.set_fact:
+    nodes_without_vm: "{{ existing_node_names | difference(existing_vm_names) }}"
+
+- name: "Observe | Detect vms_without_node (HCI VM exists, LO node absent)"
+  ansible.builtin.set_fact:
+    vms_without_node: "{{ existing_vm_names | difference(existing_node_names) }}"
+
+# ── ⑥ Summary log ─────────────────────────────────────────────────────────────
+
+- name: "Observe | World state summary"
+  ansible.builtin.debug:
+    msg: >-
+      World state for WorkerPool '{{ ansible_operator_meta.name }}':
+        HCI VMs           : {{ existing_vm_names | sort | join(', ') | default('(none)') }}
+        LO nodes          : {{ existing_node_names | sort | join(', ') | default('(none)') }}
+        Protected nodes   : {{ _protected_node_names | sort | join(', ') | default('(none)') }}
+        Safe to delete    : {{ nodes_safe_to_delete | sort | join(', ') | default('(none)') }}
+        Drift — node∌VM   : {{ nodes_without_vm | sort | join(', ') | default('(none)') }}
+        Drift — VM∌node   : {{ vms_without_node | sort | join(', ') | default('(none)') }}

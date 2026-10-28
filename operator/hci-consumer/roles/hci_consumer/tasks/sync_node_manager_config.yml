@@ -1,0 +1,34 @@
+---
+# sync_node_manager_config.yml
+#
+# Writes a ConfigMap that the csr-approver and node-labeler sidecars read for
+# their runtime configuration. Called early in main.yml, before the phase gate,
+# so the sidecars have correct values even while bootstrap is still in progress.
+#
+# ConfigMap name: hci-node-manager-config
+# Keys written:
+#   NODE_NAME_PATTERN   — spec.consumer.workers.namePrefix
+#   TARGET_NETWORK      — spec.provider.networking.internalSubnet
+#
+# MAIN_CLUSTER_DOMAIN is NOT written here — the csr-approver sidecar derives
+# the cluster domain at startup from the OpenShift DNS config object
+# (config.openshift.io/v1 DNS/cluster spec.baseDomain), so no configuration
+# is needed.
+
+- name: "NodeManager | Sync sidecar ConfigMap from WorkerPool CR"
+  kubernetes.core.k8s:
+    state: present
+    apply: true
+    definition:
+      apiVersion: v1
+      kind: ConfigMap
+      metadata:
+        name: hci-node-manager-config
+        namespace: "{{ ansible_operator_meta.namespace }}"
+        labels:
+          app.kubernetes.io/name: hci-consumer-operator
+          app.kubernetes.io/part-of: hci-integration
+          hci-integration.openshift.io/consumer: "{{ ansible_operator_meta.name }}"
+      data:
+        NODE_NAME_PATTERN: "{{ consumer.workers.name_prefix }}"
+        TARGET_NETWORK: "{{ provider.networking.internal_subnet }}"

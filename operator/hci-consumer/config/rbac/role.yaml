@@ -1,0 +1,105 @@
+---
+# ClusterRole for the hci-consumer operator ServiceAccount.
+#
+# Principle: minimal permissions. The operator only needs what the steady-state
+# reconciliation loop requires. Bootstrap-phase permissions (MachineConfig write,
+# cross-cluster credential exchange) belong to a separate ServiceAccount.
+
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: hci-consumer-operator
+  labels:
+    app.kubernetes.io/name: hci-consumer-operator
+    app.kubernetes.io/component: rbac
+rules:
+
+  # Manage WorkerPool CRs and their status subresource
+  - apiGroups: ["hci-integration.openshift.io"]
+    resources: ["workerpools"]
+    verbs: ["get", "list", "watch", "patch", "update"]
+  - apiGroups: ["hci-integration.openshift.io"]
+    resources: ["workerpools/status"]
+    verbs: ["get", "patch", "update"]
+  - apiGroups: ["hci-integration.openshift.io"]
+    resources: ["workerpools/finalizers"]
+    verbs: ["update"]
+
+  # Create, read and patch WorkerPoolProvisioning CRs (bootstrap/teardown lifecycle)
+  - apiGroups: ["hci-integration.openshift.io"]
+    resources: ["workerpoolprovisionings"]
+    verbs: ["get", "list", "watch", "create", "patch", "update"]
+  - apiGroups: ["hci-integration.openshift.io"]
+    resources: ["workerpoolprovisionings/status"]
+    verbs: ["get", "patch", "update"]
+
+  # Read provider credentials Secret + provisioner SSH key Secret (BS-06b)
+  - apiGroups: [""]
+    resources: ["secrets"]
+    verbs: ["get", "list", "watch"]
+
+  # ConfigMap write — operator writes hci-node-manager-config for sidecars
+  - apiGroups: [""]
+    resources: ["configmaps"]
+    verbs: ["get", "list", "watch", "create", "update", "patch"]
+
+  # Read ClusterVersion (BS-06b: derive desired RHCOS version for bootfiles gate)
+  # Read DNS config (csr-approver sidecar: derive cluster baseDomain at startup)
+  - apiGroups: ["config.openshift.io"]
+    resources: ["clusterversions", "dnses"]
+    verbs: ["get", "list", "watch"]
+
+  # Node operations: read, label (patch), cordon (patch), delete (scale-down)
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch", "patch", "delete"]
+
+  # CSR approval for worker node bootstrap and serving certificates
+  - apiGroups: ["certificates.k8s.io"]
+    resources: ["certificatesigningrequests"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["certificates.k8s.io"]
+    resources: ["certificatesigningrequests/approval"]
+    verbs: ["update"]
+  - apiGroups: ["certificates.k8s.io"]
+    resources: ["signers"]
+    resourceNames:
+      - "kubernetes.io/kube-apiserver-client-kubelet"
+      - "kubernetes.io/kubelet-serving"
+    verbs: ["approve"]
+
+  # Pod eviction for node drain (scale-down)
+  - apiGroups: [""]
+    resources: ["pods/eviction"]
+    verbs: ["create"]
+  - apiGroups: [""]
+    resources: ["pods"]
+    verbs: ["get", "list", "watch"]
+
+  # MachineConfigPool + MachineConfig: create-if-absent (BS-02b), read for health check
+  - apiGroups: ["machineconfiguration.openshift.io"]
+    resources: ["machineconfigpools"]
+    verbs: ["get", "list", "watch", "create"]
+  - apiGroups: ["machineconfiguration.openshift.io"]
+    resources: ["machineconfigpools/status"]
+    verbs: ["get", "patch", "update"]
+  - apiGroups: ["machineconfiguration.openshift.io"]
+    resources: ["machineconfigs"]
+    verbs: ["get", "list", "watch", "create"]
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: hci-consumer-operator
+  labels:
+    app.kubernetes.io/name: hci-consumer-operator
+    app.kubernetes.io/component: rbac
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: hci-consumer-operator
+subjects:
+  - kind: ServiceAccount
+    name: hci-consumer-operator
+    namespace: hci-node-manager

@@ -1,0 +1,37 @@
+---
+# LO-03: Scale-up — create VMs that are missing from the desired set.
+#
+# Input  : vms_to_create  (list of VM names, from diff_desired_actual.yml)
+#          hci_kubeconfig_file.path  (from observe_world.yml)
+#          _bfv_ready  (bool, from sync_bootfiles_version.yml)
+# Action : for each name in vms_to_create, call create_worker_vm.yml
+#
+# Bootfiles gate: scale-up is deferred when _bfv_ready is false.
+# This ensures new worker VMs only PXE-boot when the gateway has confirmed
+# (via current-version.txt) that the correct RHCOS files are present.
+# A non-200 response from the gateway is also treated as "not ready".
+
+- name: "Scale-up | No VMs to create"
+  when: vms_to_create | length == 0
+  ansible.builtin.debug:
+    msg: "Scale-up: nothing to do ({{ existing_vm_names | length }} VM(s) already match desired {{ consumer.workers.count }})"
+
+- name: "Scale-up | Bootfiles not ready — deferring scale-up"
+  when:
+    - vms_to_create | length > 0
+    - not (_bfv_ready | default(false) | bool)
+  ansible.builtin.debug:
+    msg: >-
+      Scale-up deferred: gateway bootfiles not yet confirmed for
+      ClusterVersion {{ _bfv_desired | default('unknown') }}.
+      current-version.txt={{ _bfv_gateway_current | default('(unavailable)') }}.
+      Will retry on next reconcile.
+
+- name: "Scale-up | Create missing VMs"
+  when:
+    - vms_to_create | length > 0
+    - _bfv_ready | default(false) | bool
+  ansible.builtin.include_tasks: create_worker_vm.yml
+  loop: "{{ vms_to_create }}"
+  loop_control:
+    loop_var: vm_name

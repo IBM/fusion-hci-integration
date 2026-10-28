@@ -1,0 +1,65 @@
+---
+# Sample WorkerPool CR — example values from templates/integration-setup.example.yaml
+#
+# Apply with:
+#   oc apply -f config/samples/workerpool-sample.yaml
+#
+# Setup process:
+#   1. Provider (HCI) admin runs hci-cluster/setup-consumer-rbac.sh
+#      and hands the output bundle (this file + hci-provisioner-credentials Secret)
+#      to the consumer (LO) admin.
+#   2. Consumer (LO) admin fills in spec.consumer.* fields and applies.
+#
+# The spec.provider section is filled by the provider admin.
+# The spec.consumer section is filled by the consumer admin.
+
+apiVersion: hci-integration.openshift.io/v1alpha1
+kind: WorkerPool
+metadata:
+  name: hci-workers
+  namespace: hci-node-manager
+spec:
+
+  # ── Filled by provider (HCI) admin ─────────────────────────────────────────
+  provider:
+    apiEndpoint: "https://api.hci.example.com:6443"
+    namespace: "main-cluster-workers"
+    credentialsSecret: hci-provisioner-credentials
+    maxPoolSize: 10
+
+    gateway:
+      ip: "172.16.1.100"
+      prefixLength: 16                   # /16 defines the eth1 network for NAT rules
+      defaultRouter: "172.16.0.1"
+      # resources are optional — operator defaults: 2 vCPU, 4Gi RAM, 30Gi disk
+      # resources:
+      #   cpu: 2
+      #   memory: "4Gi"
+      #   storage: "30Gi"
+
+    networking:
+      macPrefix: "52:54:00"              # unique per consumer namespace on this provider
+      internalSubnet: "192.168.100.0/24"
+
+  # ── Filled by consumer (LO) admin ──────────────────────────────────────────
+  consumer:
+    # Name of the MachineConfigPool the cluster admin has prepared for HCI worker VMs.
+    # Apply main-cluster/configuration/overlays/<topology>/ before bootstrapping.
+    # Default is "hci-vm" — change only if the pool was created with a different name.
+    machineConfigPool: hci-vm
+
+    networking:
+      topology: direct                   # direct | mediated
+      dnsServer: "172.16.0.1"        # consumer bastion — resolves cluster-internal names
+      # internalNetwork and internalGateway required for mediated topology only:
+      # internalNetwork: "10.0.0.0/24"
+      # internalGateway: "172.16.0.1"
+
+    workers:
+      count: 3                           # ← adjust this to scale up or down
+      namePrefix: worker-x86
+      # resources are optional — operator defaults: 4 vCPU, 8Gi RAM, 50Gi disk
+      # resources:
+      #   cpu: 4
+      #   memory: "8Gi"
+      #   storage: "50Gi"

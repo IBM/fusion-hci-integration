@@ -1,0 +1,7 @@
+# Python dependencies for the node-manager sidecars.
+# Both packages are already present in the ose-ansible-operator base image.
+# This file is kept for documentation purposes — no additional installation needed.
+#
+# kubernetes  — Kubernetes Python client (pre-installed by ansible-runner deps)
+# cryptography — used by node-auto-approver.py to parse CSR PEM data
+#                (pre-installed as a system package on the base image)

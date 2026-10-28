@@ -1,0 +1,27 @@
+apiVersion: machineconfiguration.openshift.io/v1
+kind: MachineConfigPool
+metadata:
+  name: hci-vm
+  labels:
+    machineconfiguration.openshift.io/role: hci-vm
+spec:
+  machineConfigSelector:
+    matchExpressions:
+      # Include base worker configs and hci-vm specific configs
+      - key: machineconfiguration.openshift.io/role
+        operator: In
+        values:
+          - worker
+          - hci-vm
+      # Exclude s390x platform-specific MachineConfigs (multipath storage)
+      - key: node-platform
+        operator: NotIn
+        values:
+          - s390x
+  nodeSelector:
+    matchLabels:
+      node-role.kubernetes.io/hci-vm: ""
+  paused: false
+  maxUnavailable: 1
+
+# Made with Bob

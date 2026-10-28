@@ -1,0 +1,373 @@
+---
+# hci_consumer role — main reconciliation entry point
+#
+# Reconciliation follows a strict observe → diff → act pattern:
+#
+#   OBSERVE  observe_world.yml      — all API calls; produces world-state facts
+#   DIFF     diff_desired_actual.yml — pure set arithmetic; produces action lists
+#   ACT      scale_up.yml           — create VMs in vms_to_create
+#            scale_down.yml         — delete VMs in vms_safe_to_delete;
+#                                     report vms_blocked in CR status
+#
+# No API calls are made outside observe_world.yml except for the credentials
+# check below (which is a hard gate before observe runs) and status writes.
+#
+# The runner injects these variables automatically:
+#   ansible_operator_meta.name       — CR metadata.name
+#   ansible_operator_meta.namespace  — CR metadata.namespace
+
+- name: "Log WorkerPool reconcile start"
+  ansible.builtin.debug:
+    msg: >-
+      Reconciling WorkerPool '{{ ansible_operator_meta.name }}'
+      in namespace '{{ ansible_operator_meta.namespace }}'
+      | topology={{ consumer.networking.topology }}
+      | workers.count={{ consumer.workers.count }}
+      | workers.name_prefix={{ consumer.workers.name_prefix }}
+
+# ── Gate: credentials Secret must exist before we touch anything ──────────────
+
+- name: "Verify provider credentials Secret exists"
+  kubernetes.core.k8s_info:
+    api_version: v1
+    kind: Secret
+    name: "{{ provider.credentials_secret }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+  register: creds_secret
+
+- name: "Set status condition: ProviderCredentialsMissing"
+  when: creds_secret.resources | length == 0
+  operator_sdk.util.k8s_status:
+    api_version: hci-integration.openshift.io/v1alpha1
+    kind: WorkerPool
+    name: "{{ ansible_operator_meta.name }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+    status:
+      phase: "Failed"
+      conditions:
+        - type: "ProviderCredentialsReady"
+          status: "False"
+          reason: "SecretNotFound"
+          message: "Secret '{{ provider.credentials_secret }}' not found in namespace '{{ ansible_operator_meta.namespace }}'"
+
+- name: "Abort reconcile — credentials Secret missing"
+  when: creds_secret.resources | length == 0
+  ansible.builtin.fail:
+    msg: "Provider credentials Secret '{{ provider.credentials_secret }}' not found. Reconcile aborted."
+
+- name: "Set status condition: ProviderCredentialsReady"
+  operator_sdk.util.k8s_status:
+    api_version: hci-integration.openshift.io/v1alpha1
+    kind: WorkerPool
+    name: "{{ ansible_operator_meta.name }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+    status:
+      conditions:
+        - type: "ProviderCredentialsReady"
+          status: "True"
+          reason: "SecretFound"
+          message: "Provider credentials Secret found."
+
+# ── Sync node-manager sidecar ConfigMap ──────────────────────────────────────
+# Keeps NODE_NAME_PATTERN and TARGET_NETWORK in sync with the WorkerPool CR.
+# Runs every reconcile so the sidecars always reflect the current CR values.
+
+- name: "Sync node-manager sidecar ConfigMap"
+  ansible.builtin.include_tasks: sync_node_manager_config.yml
+
+# ── Ensure MachineConfigPool + MachineConfigs exist on this cluster ───────────
+# Creates MCP and MCs if absent (create-if-absent, no ownership, no teardown).
+# Runs before the phase gate and WPP creation so the provisioner never starts
+# without the MCP already present.
+
+- name: "Ensure MachineConfigPool and MachineConfigs"
+  ansible.builtin.include_tasks: ensure_machineconfig.yml
+
+# ── Gate: MCP must be healthy before WPP is created ──────────────────────────
+# The provisioner has no visibility into consumer-cluster resources. The consumer
+# is responsible for ensuring the MCP exists and is healthy before bootstrap
+# begins — the provisioner must never be created without a working MCP.
+
+- name: "Check MachineConfigPool health"
+  kubernetes.core.k8s_info:
+    api_version: machineconfiguration.openshift.io/v1
+    kind: MachineConfigPool
+    name: "{{ consumer.machine_config_pool }}"
+  register: _mcp_health
+
+- name: "Set _mcp_ready fact"
+  ansible.builtin.set_fact:
+    _mcp_ready: >-
+      {{
+        (_mcp_health.resources | length > 0)
+        and not (
+          (_mcp_health.resources | first).status.conditions | default([])
+          | selectattr('type', 'equalto', 'Degraded')
+          | selectattr('status', 'equalto', 'True')
+          | list | length > 0
+        )
+      }}
+
+- name: "Log MCP gate status"
+  ansible.builtin.debug:
+    msg: >-
+      MachineConfigPool '{{ consumer.machine_config_pool }}':
+      ready={{ _mcp_ready }}.
+      {{ 'WPP creation permitted.' if _mcp_ready else 'WPP creation deferred — MCP not yet ready.' }}
+
+- name: "Set status condition: MachineConfigPoolNotReady"
+  when: not _mcp_ready | bool
+  operator_sdk.util.k8s_status:
+    api_version: hci-integration.openshift.io/v1alpha1
+    kind: WorkerPool
+    name: "{{ ansible_operator_meta.name }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+    status:
+      conditions:
+        - type: "MachineConfigPoolReady"
+          status: "False"
+          reason: "MachineConfigPoolNotReady"
+          message: >-
+            MachineConfigPool '{{ consumer.machine_config_pool }}' is not yet ready.
+            Bootstrap deferred until MCO finishes processing.
+
+- name: "Defer reconcile — MCP not yet ready"
+  when: not _mcp_ready | bool
+  ansible.builtin.meta: end_play
+
+- name: "Set status condition: MachineConfigPoolReady"
+  operator_sdk.util.k8s_status:
+    api_version: hci-integration.openshift.io/v1alpha1
+    kind: WorkerPool
+    name: "{{ ansible_operator_meta.name }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+    status:
+      conditions:
+        - type: "MachineConfigPoolReady"
+          status: "True"
+          reason: "MachineConfigPoolReady"
+          message: "MachineConfigPool '{{ consumer.machine_config_pool }}' is present and not Degraded."
+
+# ── Gate: phase must be Ready before worker reconcile runs ───────────────────
+# If the hci-provisioner operator has not yet completed bootstrap (or is running
+# teardown), we must not reconcile workers — the infrastructure does not exist yet.
+#
+# Phase transitions:
+#   (none set)     → first reconcile: create WorkerPoolProvisioning CR, set Provisioning
+#   Provisioning   → WorkerPoolProvisioning bootstrap in flight; skip worker reconcile
+#   Ready          → bootstrap complete; worker reconcile permitted
+#   Deprovisioning → teardown WorkerPoolProvisioning in flight; skip worker reconcile
+#   Deprovisioned  → teardown complete; finalizer release next
+#   Failed         → a provisioning step failed; operator cannot self-heal
+
+- name: "Fetch current WorkerPool CR (phase + UID for ownerReference)"
+  kubernetes.core.k8s_info:
+    api_version: hci-integration.openshift.io/v1alpha1
+    kind: WorkerPool
+    name: "{{ ansible_operator_meta.name }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+  register: _consumer_cr
+
+- name: "Set consumer_phase and consumer_uid facts"
+  ansible.builtin.set_fact:
+    consumer_phase: >-
+      {{ (_consumer_cr.resources | first).status.phase | default('') }}
+    consumer_uid: >-
+      {{ (_consumer_cr.resources | first).metadata.uid }}
+
+# ScalingUp / ScalingDown / ScalingDownBlocked are sub-states of Ready:
+# the phase gate must permit them so that the worker reconcile continues.
+- name: "Normalise scaling sub-states to Ready for phase gate"
+  ansible.builtin.set_fact:
+    consumer_phase: "Ready"
+  when: consumer_phase in ['ScalingUp', 'ScalingDown', 'ScalingDownBlocked']
+
+- name: "Log phase gate check"
+  ansible.builtin.debug:
+    msg: >-
+      HCIConsumer '{{ ansible_operator_meta.name }}' phase='{{ consumer_phase }}'.
+      Worker reconcile {{ 'PERMITTED' if consumer_phase == 'Ready' else 'SKIPPED' }}.
+
+# ── First reconcile: no phase set → create WorkerPoolProvisioning CR ─────────
+# One stable CR per pool, named {{ consumer_name }}-provisioning.
+# spec.mode is patched to teardown at deletion time by the cleanup role.
+
+- name: "First reconcile: check whether WorkerPoolProvisioning CR already exists"
+  when: consumer_phase == ''
+  kubernetes.core.k8s_info:
+    api_version: hci-integration.openshift.io/v1alpha1
+    kind: WorkerPoolProvisioning
+    name: "{{ ansible_operator_meta.name }}-provisioning"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+  register: _existing_provisioning
+
+- name: "First reconcile: create WorkerPoolProvisioning CR"
+  when:
+    - consumer_phase == ''
+    - _existing_provisioning.resources | length == 0
+  kubernetes.core.k8s:
+    state: present
+    apply: false
+    definition: "{{ lookup('template', role_path + '/templates/wpp_definition.json.j2') }}"
+
+- name: "First reconcile: set WorkerPool phase → Provisioning"
+  when: consumer_phase == ''
+  operator_sdk.util.k8s_status:
+    api_version: hci-integration.openshift.io/v1alpha1
+    kind: WorkerPool
+    name: "{{ ansible_operator_meta.name }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+    status:
+      phase: "Provisioning"
+      conditions:
+        - type: "WorkerReconcileActive"
+          status: "False"
+          reason: "BootstrapInProgress"
+          message: >-
+            Bootstrap WorkerPoolProvisioning CR created. Worker reconcile suspended
+            until provisioning completes.
+
+- name: "First reconcile: end play — provisioning CR created, wait for next reconcile"
+  when: consumer_phase == ''
+  ansible.builtin.meta: end_play
+
+# ── Phase gate: non-Ready phases block worker reconcile ──────────────────────
+
+- name: "Phase gate: skip worker reconcile unless phase is Ready"
+  when: consumer_phase != 'Ready'
+  block:
+
+    - name: "Phase gate: set status — Provisioning (bootstrap in progress)"
+      when: consumer_phase == 'Provisioning'
+      operator_sdk.util.k8s_status:
+        api_version: hci-integration.openshift.io/v1alpha1
+        kind: WorkerPool
+        name: "{{ ansible_operator_meta.name }}"
+        namespace: "{{ ansible_operator_meta.namespace }}"
+        status:
+          phase: "Provisioning"
+          conditions:
+            - type: "WorkerReconcileActive"
+              status: "False"
+              reason: "BootstrapInProgress"
+              message: >-
+                Bootstrap provisioning is in progress. Worker reconcile
+                is suspended until WorkerPoolProvisioning phase reaches Complete.
+
+    - name: "Phase gate: set status — Deprovisioning (teardown in progress)"
+      when: consumer_phase in ['Deprovisioning', 'Deprovisioned']
+      operator_sdk.util.k8s_status:
+        api_version: hci-integration.openshift.io/v1alpha1
+        kind: WorkerPool
+        name: "{{ ansible_operator_meta.name }}"
+        namespace: "{{ ansible_operator_meta.namespace }}"
+        status:
+          conditions:
+            - type: "WorkerReconcileActive"
+              status: "False"
+              reason: "TeardownInProgress"
+              message: >-
+                Teardown is in progress. Worker reconcile is suspended.
+
+    - name: "Phase gate: end reconcile — phase is not Ready"
+      ansible.builtin.meta: end_play
+
+# ── BS-06b: sync bootfiles version + scale-up gate ───────────────────────────
+# Runs every reconcile while phase == Ready.
+# Writes desired-version.txt to gateway if ClusterVersion has changed.
+# Sets _bfv_ready fact — consumed by scale_up.yml to gate VM creation.
+
+- name: "Sync bootfiles version (BS-06b)"
+  ansible.builtin.include_tasks: sync_bootfiles_version.yml
+
+# ── OBSERVE ───────────────────────────────────────────────────────────────────
+# Gather all cluster state in one pass. Produces:
+#   existing_vm_names, existing_node_names, nodes_with_workload,
+#   nodes_without_vm, vms_without_node, hci_kubeconfig_file
+
+- name: "Observe world state"
+  ansible.builtin.include_tasks: observe_world.yml
+
+# ── DIFF ──────────────────────────────────────────────────────────────────────
+# Compute desired vs actual. Produces:
+#   desired_vm_names, vms_to_create, vms_to_delete,
+#   vms_safe_to_delete, vms_blocked
+
+- name: "Diff desired vs actual"
+  ansible.builtin.include_tasks: diff_desired_actual.yml
+
+# ── ACT ───────────────────────────────────────────────────────────────────────
+
+# TODO LO-04: CSR approval for new nodes (owned by hci-node-manager)
+# TODO LO-05: node labeling for new nodes (owned by hci-node-manager)
+
+- name: "Scale-up: create missing VMs"
+  ansible.builtin.include_tasks: scale_up.yml
+
+- name: "Scale-down: remove excess VMs"
+  ansible.builtin.include_tasks: scale_down.yml
+
+# ── LO-07: Update worker status counts + phase sub-state ─────────────────────
+# Written after the act phase so counts reflect the work observed this reconcile.
+#
+# deployedWorkers — VMs present on provider (from observe_world.yml, pre-act)
+# readyWorkers    — nodes that have joined and carry the MCP role label
+# pendingWorkers  — convergence distance: max(surplus, deficit)
+#                   non-zero whenever deployed ≠ desired, regardless of direction
+#
+# Phase sub-state (replaces bare "Ready" while scaling is in progress):
+#   ScalingUp          — deficit > 0 (VMs still need to be created)
+#   ScalingDown        — surplus > 0, vms_to_delete were acted on this reconcile,
+#                        all surplus VMs are draining/drainable (not truly blocked)
+#   ScalingDownBlocked — surplus > 0 AND at least one VM is genuinely blocked
+#                        (its node exists but is neither cordoned nor drained)
+#   Ready              — surplus == 0 AND deficit == 0 (pool is converged)
+#
+# Note: existing_vm_names is the pre-act snapshot; pendingWorkers therefore
+# reflects the work outstanding at the START of this reconcile.  It will drop
+# to 0 on the reconcile after act completes (VMs created/deleted on provider).
+
+- name: "Status | Compute phase sub-state and pendingWorkers"
+  ansible.builtin.set_fact:
+    _status_pending: >-
+      {%- if deficit | int > 0 or existing_node_names | length < existing_vm_names | length -%}
+        {{ (existing_vm_names | length) - (existing_node_names | length) }}
+      {%- else -%}
+        {{ surplus | int }}
+      {%- endif -%}
+    _status_phase: >-
+      {%- set _truly_blocked = existing_vm_names | intersect(existing_node_names) | difference(nodes_safe_to_delete) -%}
+      {%- set _remaining_surplus = (surplus | int) - (vms_to_delete | length) -%}
+      {%- if (surplus | int) > 0 and _remaining_surplus > 0 and (_truly_blocked | length) > 0 -%}
+        ScalingDownBlocked
+      {%- elif (surplus | int) > 0 -%}
+        ScalingDown
+      {%- elif (deficit | int) > 0 or (existing_node_names | length) < (existing_vm_names | length) -%}
+        ScalingUp
+      {%- else -%}
+        Ready
+      {%- endif -%}
+
+- name: "Status | Report worker counts and phase sub-state"
+  operator_sdk.util.k8s_status:
+    api_version: hci-integration.openshift.io/v1alpha1
+    kind: WorkerPool
+    name: "{{ ansible_operator_meta.name }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+    status: >-
+      {{
+        {
+          'phase':           _status_phase,
+          'deployedWorkers': existing_vm_names | length | int,
+          'readyWorkers':    existing_node_names | length | int,
+          'pendingWorkers':  _status_pending | int
+        }
+      }}
+
+# ── Cleanup ───────────────────────────────────────────────────────────────────
+
+- name: "Remove temp kubeconfig"
+  ansible.builtin.file:
+    path: "{{ hci_kubeconfig_file.path }}"
+    state: absent
+  when: hci_kubeconfig_file is defined and hci_kubeconfig_file.path is defined

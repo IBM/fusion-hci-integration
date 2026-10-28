@@ -1,0 +1,53 @@
+{
+  "apiVersion": "hci-integration.openshift.io/v1alpha1",
+  "kind": "WorkerPoolProvisioning",
+  "metadata": {
+    "name": "{{ ansible_operator_meta.name }}-provisioning",
+    "namespace": "{{ ansible_operator_meta.namespace }}",
+    "labels": {
+      "hci-integration.openshift.io/consumer": "{{ ansible_operator_meta.name }}"
+    },
+    "ownerReferences": [
+      {
+        "apiVersion": "hci-integration.openshift.io/v1alpha1",
+        "kind": "WorkerPool",
+        "name": "{{ ansible_operator_meta.name }}",
+        "uid": "{{ consumer_uid }}",
+        "controller": true,
+        "blockOwnerDeletion": true
+      }
+    ]
+  },
+  "spec": {
+    "workerPoolRef": "{{ ansible_operator_meta.name }}",
+    "mode": "bootstrap",
+    "providerAccess": {
+      "apiEndpoint": "{{ provider.api_endpoint }}",
+      "namespace": "{{ provider.namespace }}",
+      "credentialsSecret": "{{ provider.credentials_secret }}"
+    },
+    "infrastructure": {
+      "gateway": {
+        "ip": "{{ provider.gateway.ip }}",
+        "prefixLength": {{ provider.gateway.prefix_length | int }},
+        "defaultRouter": "{{ provider.gateway.default_router }}"
+      },
+      "network": {
+        "machineConfigPool": "{{ consumer.machine_config_pool }}",
+        "topology": "{{ consumer.networking.topology }}",
+        "macPrefix": "{{ provider.networking.mac_prefix }}",
+        "internalSubnet": "{{ provider.networking.internal_subnet }}",
+        "dnsServer": "{{ consumer.networking.dns_server }}"
+        {% if consumer.networking.internal_network | default('') != '' %}
+        ,"internalNetwork": "{{ consumer.networking.internal_network }}"
+        {% endif %}
+        {% if consumer.networking.internal_gateway | default('') != '' %}
+        ,"internalGateway": "{{ consumer.networking.internal_gateway }}"
+        {% endif %}
+      },
+      "capacity": {
+        "maxPoolSize": {{ provider.max_pool_size | int }}
+      }
+    }
+  }
+}
