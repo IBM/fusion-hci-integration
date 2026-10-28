@@ -5,6 +5,8 @@
 
 # Documentation site
 mkdocs
+mkdocs-material>=9.5
+mkdocs-with-pdf>=0.9
 
 # Templating — used by generate-setup
 jinja2
