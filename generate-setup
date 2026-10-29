@@ -15,10 +15,14 @@ Outputs written into the working copy:
         99-worker-s390x-hci-network-route.yaml
     workspace/<domain>.zone                                 (forward DNS zone section)
     workspace/<subnet>.in-addr.arpa.zone                   (reverse DNS zonefile)
+
+All outputs are created with mode 0600 (owner only). Generation stops if an
+output would contain credential-like content.
 """
 
 import ipaddress
 import os
+import re
 import sys
 import textwrap
 from pathlib import Path
@@ -32,6 +36,17 @@ try:
     import jinja2
 except ImportError:
     sys.exit("Error: Jinja2 is required.  Install with: pip install jinja2")
+
+# Credential-like content that must never be written into a generated file.
+# Credentials live in cluster Secrets, not in these files (see templates/DESIGN-NOTES.md).
+CREDENTIAL_RE = re.compile(
+    r"sha256~[A-Za-z0-9_-]{20,}"                                   # OpenShift tokens
+    r"|eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{5,}"  # JWTs
+    r"|-----BEGIN [A-Z ]*PRIVATE KEY-----"                         # PEM private keys
+    r"|gh[pousr]_[A-Za-z0-9]{30,}|github_pat_[A-Za-z0-9_]{30,}"    # GitHub tokens
+    r"|AKIA[0-9A-Z]{16}"                                           # AWS access key IDs
+    r"|xox[baprs]-[A-Za-z0-9-]{10,}"                               # Slack tokens
+)
 
 # Defaults mirror the WorkerPool CRD defaults (operator/hci-consumer/config/crd/workerpool.yaml).
 POOL_NAME = "hci-workers"
@@ -70,8 +85,25 @@ def derive_network(subnet_cidr: str) -> tuple[str, str]:
 
 
 def write_file(path: Path, content: str, label: str) -> None:
+    """Write a generated file that only the owner can read or write (0600).
+
+    Refuses content that looks like a credential. The finding is reported by
+    file and line only; the matched text is never printed.
+    """
+    for lineno, line in enumerate(content.splitlines(), start=1):
+        if CREDENTIAL_RE.search(line):
+            sys.exit(
+                f"Error: {label} (line {lineno}) contains credential-like content; "
+                "refusing to write it. Keep credentials in cluster Secrets, not in the "
+                "inventory file or generated artifacts."
+            )
+
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(content)
+    # Create with 0600, and tighten a pre-existing file before any content is written.
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as fh:
+        os.fchmod(fh.fileno(), 0o600)
+        fh.write(content)
     print(f"  wrote  {path}")
 
 
@@ -254,7 +286,6 @@ def generate_setup_env(setup: dict, repo_root: Path) -> None:
     """)
 
     write_file(repo_root / "setup_env.sh", content, "setup_env.sh")
-    os.chmod(repo_root / "setup_env.sh", 0o644)
 
 
 def generate_config_env(setup: dict, repo_root: Path) -> None:

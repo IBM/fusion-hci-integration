@@ -120,6 +120,12 @@ a new HCI ↔ main cluster relationship.
 | `workspace/<domain>.zone` | Forward DNS zone section. Main cluster admin appends to bastion DNS. |
 | `workspace/<subnet>.in-addr.arpa.zone` | Reverse DNS zonefile. Main cluster admin appends to bastion DNS. |
 
+All outputs are created with mode `0600` (readable by the owner only), and
+`generate-setup` refuses to write a file whose content looks like a credential
+(tokens, private keys). No secrets belong in these files; credentials are created
+on the cluster. If you hand a file to someone else, such as the zone files for the
+DNS admin, adjust its permissions or copy it with `scp` or `oc`.
+
 The WorkerPool skeleton pre-fills:
 - `spec.consumer.machineConfigPool` ← from `consumer.machineConfigPool`
 - `spec.consumer.networking.topology` ← from `consumer.networking.topology`
