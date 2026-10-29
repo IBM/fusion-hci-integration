@@ -1,7 +1,7 @@
 site_name: Fusion HCI Multi-Architecture Integration
 site_description: Integration of Fusion HCI x86 workers with s390x/LinuxONE OpenShift clusters
 site_author: OpenShift Integration Team
-site_url: https://pages.github.com/IBM/fusion-hci-integration/
+site_url: https://IBM.github.io/fusion-hci-integration/
 repo_url: https://github.com/IBM/fusion-hci-integration
 edit_uri: edit/main/docs/
 
