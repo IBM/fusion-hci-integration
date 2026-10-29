@@ -254,7 +254,7 @@ Contact maintainers privately:
 
 ## Questions?
 
-- **Documentation**: Check the [documentation site](https://pages.github.com/IBM/fusion-hci-integration/)
+- **Documentation**: Check the [documentation site](https://IBM.github.io/fusion-hci-integration/)
 - **Discussions**: Use GitHub Discussions
 - **Issues**: Search existing issues
 - **Chat**: Join our community chat (if available)

@@ -1,6 +1,6 @@
 # Fusion HCI Multi-Architecture Integration
 
-[![Documentation](https://img.shields.io/badge/docs-mkdocs-blue)](https://pages.github.com/IBM/fusion-hci-integration/)
+[![Documentation](https://img.shields.io/badge/docs-mkdocs-blue)](https://IBM.github.io/fusion-hci-integration/)
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 
 Integration solution for adding Fusion HCI x86 worker nodes to s390x/LinuxONE OpenShift clusters, enabling true multi-architecture workload deployment.
@@ -117,7 +117,7 @@ The steps below are a summary. See the [Getting Started Guide](docs/getting-star
 
 ## Documentation
 
-Full documentation is available at [https://pages.github.com/IBM/fusion-hci-integration/](https://pages.github.com/IBM/fusion-hci-integration/)
+Full documentation is available at [https://IBM.github.io/fusion-hci-integration/](https://IBM.github.io/fusion-hci-integration/)
 
 - [Getting Started Guide](docs/getting-started.md) - Step-by-step setup
 - [Prerequisites](docs/prerequisites.md) - Requirements and preparation
@@ -213,7 +213,7 @@ The architecture is designed to support additional platforms:
 
 ## Support
 
-- **Documentation**: [https://pages.github.com/IBM/fusion-hci-integration/](https://pages.github.com/IBM/fusion-hci-integration/)
+- **Documentation**: [https://IBM.github.io/fusion-hci-integration/](https://IBM.github.io/fusion-hci-integration/)
 - **Issues**: [GitHub Issues](https://github.com/IBM/fusion-hci-integration/issues)
 - **Discussions**: [GitHub Discussions](https://github.com/IBM/fusion-hci-integration/discussions)
 
