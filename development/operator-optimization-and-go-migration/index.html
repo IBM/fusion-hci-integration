@@ -1,0 +1,1842 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Integration of Fusion HCI x86 workers with s390x/LinuxONE OpenShift clusters">
+      
+      
+        <meta name="author" content="OpenShift Integration Team">
+      
+      
+        <link rel="canonical" href="https://pages.github.com/IBM/fusion-hci-integration/development/operator-optimization-and-go-migration/">
+      
+      
+        <link rel="prev" href="../operator-build-deploy/">
+      
+      
+        <link rel="next" href="../../CONTRIBUTING/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
+    
+    
+      
+        <title>Optimization & Go Migration - Fusion HCI Multi-Architecture Integration</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indio">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#operator-optimization-and-go-migration-guide" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="Fusion HCI Multi-Architecture Integration" class="md-header__button md-logo" aria-label="Fusion HCI Multi-Architecture Integration" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Fusion HCI Multi-Architecture Integration
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Optimization & Go Migration
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+    
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/IBM/fusion-hci-integration" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../prerequisites/" class="md-tabs__link">
+          
+  
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../architecture/solution-overview/" class="md-tabs__link">
+          
+  
+  
+  Architecture
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../configuration/hci-cluster/" class="md-tabs__link">
+          
+  
+  
+  Configuration
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../operations/troubleshooting/" class="md-tabs__link">
+          
+  
+  
+  Operations
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../developer-notes/" class="md-tabs__link">
+          
+  
+  
+  Development
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="Fusion HCI Multi-Architecture Integration" class="md-nav__button md-logo" aria-label="Fusion HCI Multi-Architecture Integration" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Fusion HCI Multi-Architecture Integration
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/IBM/fusion-hci-integration" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../prerequisites/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Prerequisites
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../deployment-variants/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment Variants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/solution-overview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Solution Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/architecture-overview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/network-design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Network Design
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/vm-provisioning/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VM Provisioning
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/provider-consumer-model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Provider/Consumer Model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/provisioning-model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Provisioning Model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/setup-concept/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup Concept
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_4" >
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Configuration
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/hci-cluster/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    HCI Cluster Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/main-cluster/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Main Cluster Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../configuration/kustomize-overlays/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Kustomize Overlays
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operations
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Operations
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operations/troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operations/monitoring/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Monitoring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_6" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Development
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../developer-notes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Developer Notes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../operator-build-deploy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Build & Deploy Operators
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Optimization & Go Migration
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Optimization & Go Migration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-executive-summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Executive Summary
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-immediate-optimizations-for-ansible-operators" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Immediate Optimizations for Ansible Operators
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. Immediate Optimizations for Ansible Operators">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#21-enable-event-driven-dependent-resource-watches" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.1 Enable Event-Driven Dependent Resource Watches
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#22-disable-os-fact-gathering-gatheredfacts-false" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.2 Disable OS Fact Gathering (gatheredFacts: false)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#23-cascade-sequential-steps-in-advance_stepsyml" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.3 Cascade Sequential Steps in advance_steps.yml
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#24-server-side-api-filtering-in-observe_worldyml" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.4 Server-Side API Filtering in observe_world.yml
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#25-operator-runner-environment-tuning" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.5 Operator Runner Environment Tuning
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-comparison-ansible-vs-golang-operators" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Comparison: Ansible vs. Golang Operators
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-golang-operator-migration-blueprint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Golang Operator Migration Blueprint
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4. Golang Operator Migration Blueprint">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#key-migration-steps" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key Migration Steps
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-trade-offs-and-recommendation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Trade-offs and Recommendation
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../CONTRIBUTING/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../operator-roadmap/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operator Roadmap
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#1-executive-summary" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        1. Executive Summary
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#2-immediate-optimizations-for-ansible-operators" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2. Immediate Optimizations for Ansible Operators
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="2. Immediate Optimizations for Ansible Operators">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#21-enable-event-driven-dependent-resource-watches" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.1 Enable Event-Driven Dependent Resource Watches
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#22-disable-os-fact-gathering-gatheredfacts-false" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.2 Disable OS Fact Gathering (gatheredFacts: false)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#23-cascade-sequential-steps-in-advance_stepsyml" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.3 Cascade Sequential Steps in advance_steps.yml
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#24-server-side-api-filtering-in-observe_worldyml" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.4 Server-Side API Filtering in observe_world.yml
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#25-operator-runner-environment-tuning" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        2.5 Operator Runner Environment Tuning
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#3-comparison-ansible-vs-golang-operators" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        3. Comparison: Ansible vs. Golang Operators
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#4-golang-operator-migration-blueprint" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        4. Golang Operator Migration Blueprint
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="4. Golang Operator Migration Blueprint">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#key-migration-steps" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Key Migration Steps
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#5-trade-offs-and-recommendation" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        5. Trade-offs and Recommendation
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="operator-optimization-and-go-migration-guide">Operator Optimization and Go Migration Guide<a class="headerlink" href="#operator-optimization-and-go-migration-guide" title="Permanent link">&para;</a></h1>
+<p>This document captures architectural analysis, performance tuning recommendations for the current Ansible-based operators, and the roadmap for migrating to native Golang operators.</p>
+<hr />
+<h2 id="1-executive-summary">1. Executive Summary<a class="headerlink" href="#1-executive-summary" title="Permanent link">&para;</a></h2>
+<p>The Fusion HCI integration currently runs two Ansible-based operators built with the Operator SDK Ansible plugin:
+* <a href="../operator-build-deploy/"><code>hci-consumer</code></a>: Watches <code>WorkerPool</code> CRs on the main cluster, scales worker VMs on the HCI cluster, and manages node join operations.
+* <a href="../operator-build-deploy/"><code>hci-provisioner</code></a>: Watches <code>WorkerPoolProvisioning</code> CRs, orchestrating UDN creation, gateway VM deployment, SSH readiness probes, and ignition generation.</p>
+<p>While functional and verified end-to-end, the Ansible implementation exhibits latency during state transitions due to synchronous playbook execution and timer-based reconciliation loops.</p>
+<hr />
+<h2 id="2-immediate-optimizations-for-ansible-operators">2. Immediate Optimizations for Ansible Operators<a class="headerlink" href="#2-immediate-optimizations-for-ansible-operators" title="Permanent link">&para;</a></h2>
+<p>The following improvements can be implemented directly within the existing Ansible operator architecture without rewriting the codebase in Go.</p>
+<h3 id="21-enable-event-driven-dependent-resource-watches">2.1 Enable Event-Driven Dependent Resource Watches<a class="headerlink" href="#21-enable-event-driven-dependent-resource-watches" title="Permanent link">&para;</a></h3>
+<p>In <a href="https://github.com/IBM/fusion-hci-integration/blob/main/operator/hci-consumer/watches.yaml"><code>operator/hci-consumer/watches.yaml</code></a> and <a href="https://github.com/IBM/fusion-hci-integration/blob/main/operator/hci-provisioner/watches.yaml"><code>operator/hci-provisioner/watches.yaml</code></a>, <code>watchDependentResources</code> is currently set to <code>false</code>. Reconcile loops rely almost entirely on the timer tick (<code>reconcilePeriod: 60s</code>).</p>
+<p><strong>Recommended Configuration</strong>:
+<div class="highlight"><pre><span></span><code><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">version</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1alpha1</span>
+<span class="w">  </span><span class="nt">group</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">hci-integration.openshift.io</span>
+<span class="w">  </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">WorkerPool</span>
+<span class="w">  </span><span class="nt">role</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">hci_consumer</span>
+<span class="w">  </span><span class="nt">reconcilePeriod</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">30s</span>
+<span class="w">  </span><span class="nt">manageStatus</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+<span class="w">  </span><span class="nt">watchDependentResources</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">  </span><span class="nt">watchClusterScopedResources</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">true</span>
+<span class="w">  </span><span class="nt">gatheredFacts</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+</code></pre></div></p>
+<ul>
+<li><strong>Mechanism</strong>: Because <code>WorkerPoolProvisioning</code> CRs carry an <code>ownerReference</code> pointing to the owning <code>WorkerPool</code>, enabling <code>watchDependentResources: true</code> triggers an instant reconcile on <code>WorkerPool</code> when provisioning step statuses change (e.g. from <code>Pending</code> → <code>InProgress</code> → <code>Complete</code>).</li>
+<li><strong>Impact</strong>: Eliminates up to 60 seconds of idle wait time when bootstrap completes.</li>
+</ul>
+<h3 id="22-disable-os-fact-gathering-gatheredfacts-false">2.2 Disable OS Fact Gathering (<code>gatheredFacts: false</code>)<a class="headerlink" href="#22-disable-os-fact-gathering-gatheredfacts-false" title="Permanent link">&para;</a></h3>
+<p>Both operators currently set <code>gatheredFacts: true</code> in <code>watches.yaml</code> solely to obtain <code>ansible_date_time</code> timestamps.</p>
+<ul>
+<li><strong>Problem</strong>: Ansible executes the complete <code>setup</code> module inside the container on <strong>every single reconcile cycle</strong>, gathering host/container hardware, network, and disk metrics. This adds <strong>1 to 3 seconds of CPU overhead</strong> per reconcile pass.</li>
+<li><strong>Fix</strong>: Set <code>gatheredFacts: false</code> in <code>watches.yaml</code> and generate timestamps on-demand in tasks:
+  <div class="highlight"><pre><span></span><code><span class="nt">lastTransitionTime</span><span class="p">:</span><span class="w"> </span><span class="s">"{{</span><span class="nv"> </span><span class="s">lookup('pipe',</span><span class="nv"> </span><span class="s">'date</span><span class="nv"> </span><span class="s">-u</span><span class="nv"> </span><span class="s">+%Y-%m-%dT%H:%M:%SZ')</span><span class="nv"> </span><span class="s">}}"</span>
+</code></pre></div></li>
+</ul>
+<h3 id="23-cascade-sequential-steps-in-advance_stepsyml">2.3 Cascade Sequential Steps in <code>advance_steps.yml</code><a class="headerlink" href="#23-cascade-sequential-steps-in-advance_stepsyml" title="Permanent link">&para;</a></h3>
+<p>In <code>hci-provisioner</code>, each step transition currently terminates the playbook via <code>ansible.builtin.meta: end_play</code>. When Step 1 (<code>UserDefinedNetwork</code>) completes, the operator waits for the next 60s timer tick before evaluating Step 2 (<code>GatewayVM</code>).</p>
+<ul>
+<li><strong>Fix</strong>: Allow <a href="https://github.com/IBM/fusion-hci-integration/blob/main/operator/hci-provisioner/roles/hci_provisioner/tasks/advance_steps.yml"><code>advance_steps.yml</code></a> to evaluate downstream steps whose dependencies are immediately met, executing them in the same reconcile pass if no asynchronous external wait is required.</li>
+<li><strong>Impact</strong>: Shaves 1 to 2 minutes off the initial bootstrap flow.</li>
+</ul>
+<h3 id="24-server-side-api-filtering-in-observe_worldyml">2.4 Server-Side API Filtering in <code>observe_world.yml</code><a class="headerlink" href="#24-server-side-api-filtering-in-observe_worldyml" title="Permanent link">&para;</a></h3>
+<p>In <a href="https://github.com/IBM/fusion-hci-integration/blob/main/operator/hci-consumer/roles/hci_consumer/tasks/observe_world.yml"><code>observe_world.yml</code></a>, listing all cluster nodes and iterating through pods on cordoned nodes produces multiple sequential API queries.</p>
+<ul>
+<li><strong>Fix</strong>: Add <code>label_selectors</code> directly to <code>k8s_info</code> calls so filtering occurs on the Kubernetes API server rather than across large Jinja2 lists in the Ansible runner:
+  <div class="highlight"><pre><span></span><code><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="s">"Observe</span><span class="nv"> </span><span class="s">|</span><span class="nv"> </span><span class="s">List</span><span class="nv"> </span><span class="s">pool</span><span class="nv"> </span><span class="s">worker</span><span class="nv"> </span><span class="s">nodes"</span>
+<span class="w">  </span><span class="nt">kubernetes.core.k8s_info</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">api_version</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">v1</span>
+<span class="w">    </span><span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">Node</span>
+<span class="w">    </span><span class="nt">label_selectors</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">"node-role.kubernetes.io/{{</span><span class="nv"> </span><span class="s">consumer.machine_config_pool</span><span class="nv"> </span><span class="s">}}"</span>
+<span class="w">  </span><span class="nt">register</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">_obs_all_nodes</span>
+</code></pre></div></li>
+</ul>
+<h3 id="25-operator-runner-environment-tuning">2.5 Operator Runner Environment Tuning<a class="headerlink" href="#25-operator-runner-environment-tuning" title="Permanent link">&para;</a></h3>
+<p>Configure runtime environment variables in <a href="https://github.com/IBM/fusion-hci-integration/tree/main/operator/deploy/base"><code>operator/deploy/base/</code></a> deployments:
+* <code>WORKERS: "2"</code> or <code>MAX_CONCURRENT_RECONCILES: "2"</code> — Prevents queue blockages across multiple CR events.
+* <code>ANSIBLE_VERBOSITY: "0"</code> — Reduces runner JSON parsing and disk I/O in the container during steady state.
+* <code>ANSIBLE_RETRY_FILES_ENABLED: "0"</code> — Disables retry file creation.</p>
+<hr />
+<h2 id="3-comparison-ansible-vs-golang-operators">3. Comparison: Ansible vs. Golang Operators<a class="headerlink" href="#3-comparison-ansible-vs-golang-operators" title="Permanent link">&para;</a></h2>
+<table>
+<thead>
+<tr>
+<th>Metric / Feature</th>
+<th>Ansible Operator</th>
+<th>Golang Operator (<code>controller-runtime</code>)</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><strong>Event Reaction Time</strong></td>
+<td>Seconds (sequential playbook execution)</td>
+<td>Milliseconds (informer work queues &amp; event filters)</td>
+</tr>
+<tr>
+<td><strong>Memory Footprint</strong></td>
+<td>~400 MB – 800 MB per pod (<code>ose-ansible-operator</code> + Python)</td>
+<td>~30 MB – 60 MB per pod (single static binary)</td>
+</tr>
+<tr>
+<td><strong>Sidecar Containers</strong></td>
+<td>Requires 3 containers (<code>operator</code>, <code>csr-approver</code>, <code>node-labeler</code>)</td>
+<td>Single container; approver &amp; labeler run as integrated informers</td>
+</tr>
+<tr>
+<td><strong>Type Safety</strong></td>
+<td>Runtime YAML string interpretation; Ansible 2.9 quirks</td>
+<td>Compile-time Go type safety for KubeVirt, CDI, and OpenShift APIs</td>
+</tr>
+<tr>
+<td><strong>Cross-Cluster Auth</strong></td>
+<td>Writes temporary kubeconfig files to <code>/tmp</code> per reconcile</td>
+<td>In-memory <code>client.Client</code> instances with pooled HTTP/2 connections</td>
+</tr>
+<tr>
+<td><strong>External Operations</strong></td>
+<td>Python scripts, shell-outs for SSH/SCP</td>
+<td>Native Go packages (<code>golang.org/x/crypto/ssh</code>, <code>crypto/ed25519</code>)</td>
+</tr>
+<tr>
+<td><strong>Testing</strong></td>
+<td>Live cluster or bastion runner (<code>run-local.sh</code>)</td>
+<td>Fast unit/integration tests with <code>envtest</code> (no live cluster required)</td>
+</tr>
+<tr>
+<td><strong>Ecosystem Support</strong></td>
+<td>Standalone <code>ansible-operator</code> binary deprecated in SDK v1.38+</td>
+<td>First-class, standard Kubernetes &amp; OpenShift operator ecosystem</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2 id="4-golang-operator-migration-blueprint">4. Golang Operator Migration Blueprint<a class="headerlink" href="#4-golang-operator-migration-blueprint" title="Permanent link">&para;</a></h2>
+<p>When migrating to Go, the architecture simplifies into a single controller binary managing multiple controllers and informers:</p>
+<div class="highlight"><pre><span></span><code>cmd/main.go
+├── WorkerPoolReconciler (replaces hci-consumer role)
+│   ├── Remote HCI KubeVirt / CDI Client Manager
+│   └── Local Node Lifecycle &amp; Drain Manager
+├── WorkerPoolProvisioningReconciler (replaces hci-provisioner role)
+│   ├── State Machine Engine (UDN -&gt; GatewayVM -&gt; Ignition -&gt; Bootfiles)
+│   └── Native SSH/SFTP Client (gateway file transfer &amp; probes)
+├── CSRAutoApproverInformer (replaces node-auto-approver.py sidecar)
+└── NodeLabelerInformer (replaces node-labeler.py sidecar)
+</code></pre></div>
+<h3 id="key-migration-steps">Key Migration Steps<a class="headerlink" href="#key-migration-steps" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>Scaffold Project</strong>:</li>
+<li>Initialize using <code>operator-sdk init --plugins=go/v4 --domain=openshift.io</code>.</li>
+<li>Create APIs for <code>WorkerPool</code> and <code>WorkerPoolProvisioning</code>.</li>
+<li><strong>Implement Multi-Cluster Client Cache</strong>:</li>
+<li>Implement a manager that reads the credentials Secret and instantiates/caches a remote <code>client.Client</code> using <code>clientcmd.RESTConfigFromKubeConfig</code>.</li>
+<li><strong>Port Reconciliation Logic</strong>:</li>
+<li>Use typed KubeVirt (<code>kubevirt.io/api/core/v1</code>) and CDI (<code>cdi.kubevirt.io/v1beta1</code>) client packages.</li>
+<li>Replace manual node drain logic with the standard <code>k8s.io/kubectl/pkg/drain</code> package.</li>
+<li><strong>Integrate Node Manager Sidecars into Informers</strong>:</li>
+<li>Add a <code>CertificateSigningRequest</code> controller that approves kubelet and bootstrap CSRs matching the pool naming pattern.</li>
+<li>Add a <code>Node</code> controller that applies role labels based on internal IP subnet checks.</li>
+<li><strong>Multi-Architecture Builds</strong>:</li>
+<li>Leverage Go cross-compilation (<code>GOARCH=s390x go build</code>) to produce LinuxONE binaries directly from standard CI build pipelines.</li>
+</ol>
+<hr />
+<h2 id="5-trade-offs-and-recommendation">5. Trade-offs and Recommendation<a class="headerlink" href="#5-trade-offs-and-recommendation" title="Permanent link">&para;</a></h2>
+<ul>
+<li><strong>Trade-offs</strong>: Rewriting in Go requires Go/controller-runtime expertise and an upfront development investment (~20–25 story points), temporarily diverting focus from upcoming functional epics (such as Epic 3: HCI Provider Operator).</li>
+<li><strong>Recommendation</strong>:</li>
+<li><strong>Phase 1 (Immediate)</strong>: Apply the Ansible optimizations in Section 2 (<code>watchDependentResources: true</code>, <code>gatheredFacts: false</code>, cascading step execution) to achieve immediate responsiveness gains with minimal effort (~4 points).</li>
+<li><strong>Phase 2 (Production Hardening)</strong>: Transition to Go when preparing for multi-tenant production deployments or publishing to OperatorHub.</li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://github.com/IBM/fusion-hci-integration" target="_blank" rel="noopener" title="github.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "search.suggest", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "0.2.0"}}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.c21346df.min.js"></script>
+      
+    
+  </body>
+</html>

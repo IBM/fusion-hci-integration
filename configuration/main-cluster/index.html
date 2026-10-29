@@ -1,0 +1,2983 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+        <meta name="description" content="Integration of Fusion HCI x86 workers with s390x/LinuxONE OpenShift clusters">
+      
+      
+        <meta name="author" content="OpenShift Integration Team">
+      
+      
+        <link rel="canonical" href="https://pages.github.com/IBM/fusion-hci-integration/configuration/main-cluster/">
+      
+      
+        <link rel="prev" href="../hci-cluster/">
+      
+      
+        <link rel="next" href="../kustomize-overlays/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.8.0">
+    
+    
+      
+        <title>Main Cluster Setup - Fusion HCI Multi-Architecture Integration</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.57a0d79d.min.css">
+      
+        
+        <link rel="stylesheet" href="../../assets/stylesheets/palette.fb2fffe2.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    
+    
+    
+    
+    
+    <body dir="ltr" data-md-color-scheme="default" data-md-color-primary="indigo" data-md-color-accent="indio">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#main-cluster-configuration" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+      <div data-md-color-scheme="default" data-md-component="outdated" hidden>
+        
+      </div>
+    
+    
+      
+
+<header class="md-header" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="Fusion HCI Multi-Architecture Integration" class="md-header__button md-logo" aria-label="Fusion HCI Multi-Architecture Integration" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            Fusion HCI Multi-Architecture Integration
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Main Cluster Setup
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+      
+    
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+        <div class="md-search__suggest" data-md-component="search-suggest"></div>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/IBM/fusion-hci-integration" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+            
+<nav class="md-tabs" aria-label="Tabs" data-md-component="tabs">
+  <div class="md-grid">
+    <ul class="md-tabs__list">
+      
+        
+  
+  
+  
+  
+    <li class="md-tabs__item">
+      <a href="../.." class="md-tabs__link">
+        
+  
+  
+    
+  
+  Home
+
+      </a>
+    </li>
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../prerequisites/" class="md-tabs__link">
+          
+  
+  
+  Getting Started
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../architecture/solution-overview/" class="md-tabs__link">
+          
+  
+  
+  Architecture
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+    
+  
+  
+    
+    
+      <li class="md-tabs__item md-tabs__item--active">
+        <a href="../hci-cluster/" class="md-tabs__link">
+          
+  
+  
+  Configuration
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../operations/troubleshooting/" class="md-tabs__link">
+          
+  
+  
+  Operations
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../../development/developer-notes/" class="md-tabs__link">
+          
+  
+  
+  Development
+
+        </a>
+      </li>
+    
+  
+
+      
+    </ul>
+  </div>
+</nav>
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+  
+
+
+<nav class="md-nav md-nav--primary md-nav--lifted" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="Fusion HCI Multi-Architecture Integration" class="md-nav__button md-logo" aria-label="Fusion HCI Multi-Architecture Integration" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    Fusion HCI Multi-Architecture Integration
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/IBM/fusion-hci-integration" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_2" >
+        
+          
+          <label class="md-nav__link" for="__nav_2" id="__nav_2_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Getting Started
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_2_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_2">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Getting Started
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../prerequisites/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Prerequisites
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../getting-started/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../deployment-variants/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Deployment Variants
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_3" >
+        
+          
+          <label class="md-nav__link" for="__nav_3" id="__nav_3_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_3_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_3">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Architecture
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/solution-overview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Solution Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/architecture-overview/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/network-design/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Network Design
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/vm-provisioning/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    VM Provisioning
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/provider-consumer-model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Provider/Consumer Model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/provisioning-model/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Provisioning Model
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/setup-concept/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Setup Concept
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_4" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_4" id="__nav_4_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Configuration
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_4_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_4">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Configuration
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../hci-cluster/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    HCI Cluster Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Main Cluster Setup
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Main Cluster Setup
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Overview
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#prerequisites" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prerequisites
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-components" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configuration Components
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Components">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#directory-structure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Directory Structure
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#bastion-routing-and-firewall-mediated-topology-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bastion Routing and Firewall (Mediated Topology only)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#machineconfigpool-and-machineconfigs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MachineConfigPool and MachineConfigs
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="MachineConfigPool and MachineConfigs">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#step-1-review-the-base-machineconfigs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 1: Review the Base MachineConfigs
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Step 1: Review the Base MachineConfigs">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#machineconfigpool" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MachineConfigPool
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#kernel-arguments" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Kernel Arguments
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-2-choose-the-deployment-variant" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 2: Choose the Deployment Variant
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Step 2: Choose the Deployment Variant">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#mediated-topology-private-network" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Mediated Topology (Private Network)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#direct-topology-public-network" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Direct Topology (Public Network)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#applying-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Applying Configuration
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Applying Configuration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#step-1-apply-base-overlay" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 1: Apply Base + Overlay
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-2-wait-for-machineconfig-application" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 2: Wait for MachineConfig Application
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-3-verify-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 3: Verify Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#hci-node-manager" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        HCI Node Manager
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="HCI Node Manager">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#purpose" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Purpose
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deployment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deployment
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#verification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verification
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#registry-configuration-cross-cluster-model-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Registry Configuration (Cross-Cluster Model only)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Registry Configuration (Cross-Cluster Model only)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#when-needed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When Needed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Setup
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#helper-scripts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Helper Scripts
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#post-configuration-tasks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Post-Configuration Tasks
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Post-Configuration Tasks">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#step-1-verify-the-machineconfigpool" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 1: Verify the MachineConfigPool
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-2-prepare-for-worker-join" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 2: Prepare for Worker Join
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-3-monitor-worker-join" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 3: Monitor Worker Join
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#updating-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Updating Configuration
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Updating Configuration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#updating-machineconfigs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Updating MachineConfigs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#switching-variants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Switching Variants
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Troubleshooting
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Troubleshooting">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#machineconfigpool-stuck-updating" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MachineConfigPool Stuck Updating
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#workers-not-joining-the-pool" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Workers Not Joining the Pool
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#csrs-not-being-approved" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CSRs Not Being Approved
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#routes-not-applied-direct-topology" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Routes Not Applied (Direct Topology)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#best-practices" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Best Practices
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Best Practices">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#configuration-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configuration Management
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#machineconfigpool-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MachineConfigPool Management
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#security" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Security
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#operations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Operations
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#references" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        References
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../kustomize-overlays/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Kustomize Overlays
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operations
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Operations
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operations/troubleshooting/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Troubleshooting
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../operations/monitoring/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Monitoring
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+          
+        
+        <input class="md-nav__toggle md-toggle md-toggle--indeterminate" type="checkbox" id="__nav_6" >
+        
+          
+          <label class="md-nav__link" for="__nav_6" id="__nav_6_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Development
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_6_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_6">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    Development
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../development/developer-notes/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Developer Notes
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../development/operator-build-deploy/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Build & Deploy Operators
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../development/operator-optimization-and-go-migration/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Optimization & Go Migration
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../CONTRIBUTING/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Contributing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../development/operator-roadmap/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Operator Roadmap
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#overview" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Overview
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#prerequisites" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Prerequisites
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#configuration-components" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configuration Components
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Configuration Components">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#directory-structure" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Directory Structure
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#bastion-routing-and-firewall-mediated-topology-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Bastion Routing and Firewall (Mediated Topology only)
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#machineconfigpool-and-machineconfigs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MachineConfigPool and MachineConfigs
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="MachineConfigPool and MachineConfigs">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#step-1-review-the-base-machineconfigs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 1: Review the Base MachineConfigs
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Step 1: Review the Base MachineConfigs">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#machineconfigpool" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MachineConfigPool
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#kernel-arguments" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Kernel Arguments
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-2-choose-the-deployment-variant" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 2: Choose the Deployment Variant
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Step 2: Choose the Deployment Variant">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#mediated-topology-private-network" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Mediated Topology (Private Network)
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#direct-topology-public-network" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Direct Topology (Public Network)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#applying-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Applying Configuration
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Applying Configuration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#step-1-apply-base-overlay" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 1: Apply Base + Overlay
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-2-wait-for-machineconfig-application" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 2: Wait for MachineConfig Application
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-3-verify-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 3: Verify Configuration
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#hci-node-manager" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        HCI Node Manager
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="HCI Node Manager">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#purpose" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Purpose
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#deployment" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Deployment
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#verification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Verification
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#registry-configuration-cross-cluster-model-only" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Registry Configuration (Cross-Cluster Model only)
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Registry Configuration (Cross-Cluster Model only)">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#when-needed" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        When Needed
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#setup" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Setup
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#helper-scripts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Helper Scripts
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#post-configuration-tasks" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Post-Configuration Tasks
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Post-Configuration Tasks">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#step-1-verify-the-machineconfigpool" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 1: Verify the MachineConfigPool
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-2-prepare-for-worker-join" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 2: Prepare for Worker Join
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#step-3-monitor-worker-join" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Step 3: Monitor Worker Join
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#updating-configuration" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Updating Configuration
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Updating Configuration">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#updating-machineconfigs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Updating MachineConfigs
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#switching-variants" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Switching Variants
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#troubleshooting" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Troubleshooting
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Troubleshooting">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#machineconfigpool-stuck-updating" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MachineConfigPool Stuck Updating
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#workers-not-joining-the-pool" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Workers Not Joining the Pool
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#csrs-not-being-approved" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CSRs Not Being Approved
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#routes-not-applied-direct-topology" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Routes Not Applied (Direct Topology)
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#best-practices" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Best Practices
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Best Practices">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#configuration-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Configuration Management
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#machineconfigpool-management" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        MachineConfigPool Management
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#security" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Security
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#operations" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Operations
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#references" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        References
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="main-cluster-configuration">Main Cluster Configuration<a class="headerlink" href="#main-cluster-configuration" title="Permanent link">&para;</a></h1>
+<p>This document describes the main-cluster side of the integration: what has to exist on the main OpenShift cluster (and its bastion) so that x86 worker VMs hosted on the HCI cluster can join it.</p>
+<div class="admonition info">
+<p class="admonition-title">Manual steps behind the scripted setup</p>
+<p>You normally do <strong>not</strong> perform these steps by hand. The
+<a href="../../getting-started/#tier-c-connect-a-main-cluster">Setup Guide – Tier C</a>
+runs them for you with scripts, using the values from your
+<code>integration-setup.yaml</code> (rendered into <code>setup_env.sh</code> and <code>workspace/</code> by
+<code>generate-setup</code>). This page documents what each step does, so you can
+understand, verify, or repeat a single step manually.</p>
+<table>
+<thead>
+<tr>
+<th>Manual step on this page</th>
+<th>Setup Guide step</th>
+<th>Done by</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><a href="#bastion-routing-and-firewall-mediated-topology-only">Bastion routing and firewall</a></td>
+<td><a href="../../getting-started/#c2-configure-bastion-routing-and-firewall-mediated-topology-only">C.2</a></td>
+<td><code>main-cluster/scripts/01-add-route.sh</code>, <code>02-firewall-setup.sh</code></td>
+</tr>
+<tr>
+<td><a href="#machineconfigpool-and-machineconfigs">MachineConfigPool and MachineConfigs</a></td>
+<td><a href="../../getting-started/#c4-apply-machineconfigs">C.4</a></td>
+<td><code>oc apply -k</code> on the overlay (or the <code>hci-consumer</code> operator)</td>
+</tr>
+<tr>
+<td><a href="#registry-configuration-cross-cluster-model-only">Registry proxy</a></td>
+<td><a href="../../getting-started/#c5-configure-bastion-registry-proxy">C.5</a>, <a href="../../getting-started/#c6-create-the-registry-access-secret">C.6</a></td>
+<td><code>main-cluster/bastion-registry/setup-registry-proxy.sh</code>, <code>setup-registry-access.sh</code></td>
+</tr>
+<tr>
+<td><a href="#hci-node-manager">HCI Node Manager</a></td>
+<td><a href="../../getting-started/#c8-build-and-deploy-the-operators">C.8</a></td>
+<td>Deployed with the <code>hci-consumer</code> operator</td>
+</tr>
+<tr>
+<td>Operator credentials, WorkerPool CR</td>
+<td><a href="../../getting-started/#c7-create-operator-credentials">C.7</a>, <a href="../../getting-started/#c9-apply-the-workerpool-cr">C.9</a></td>
+<td>See <a href="../hci-cluster/">HCI Cluster Configuration</a></td>
+</tr>
+</tbody>
+</table>
+<p>DNS (<a href="../../getting-started/#c1-configure-dns-on-the-bastion">C.1</a>) and multi-architecture
+support (<a href="../../getting-started/#c3-enable-multi-architecture-support">C.3</a>) are
+covered only in the Setup Guide.</p>
+</div>
+<h2 id="overview">Overview<a class="headerlink" href="#overview" title="Permanent link">&para;</a></h2>
+<p>The main-cluster configuration consists of:</p>
+<ol>
+<li><strong>MachineConfigPool and MachineConfigs</strong> — created automatically by the <code>hci-consumer</code> operator from the <code>WorkerPool</code> CR; kustomize overlays exist as an optional manual fallback</li>
+<li><strong>Deployment variant</strong> — the <em>mediated</em> or <em>direct</em> overlay (the direct overlay adds static routes)</li>
+<li><strong>Bastion routing</strong> — mediated topology only</li>
+<li><strong>Registry configuration</strong> — only when <code>registry.model: cross-cluster</code></li>
+</ol>
+<h2 id="prerequisites">Prerequisites<a class="headerlink" href="#prerequisites" title="Permanent link">&para;</a></h2>
+<p>Before configuring the main cluster, ensure:</p>
+<ul>
+<li>✅ Main cluster is operational (OpenShift 4.20+)</li>
+<li>✅ Cluster admin access available (<code>${MAIN_CLUSTER_CONTEXT}</code>)</li>
+<li>✅ Network connectivity to the HCI cluster established</li>
+<li>✅ <code>integration-setup.yaml</code> written and <code>generate-setup</code> run (see <a href="../../getting-started/#workspace-setup">Workspace Setup</a>)</li>
+<li>✅ Topology (<code>mediated</code> or <code>direct</code>) and registry model chosen in <code>integration-setup.yaml</code></li>
+</ul>
+<p>See <a href="../../prerequisites/">Prerequisites</a> for detailed requirements.</p>
+<h2 id="configuration-components">Configuration Components<a class="headerlink" href="#configuration-components" title="Permanent link">&para;</a></h2>
+<h3 id="directory-structure">Directory Structure<a class="headerlink" href="#directory-structure" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code>main-cluster/
+├── configuration/
+│   ├── base/                    # Common configuration
+│   │   ├── kustomization.yaml
+│   │   ├── machineconfig-pool-hci-vm.yaml
+│   │   └── machineconfig-hci-vm-kargs.yaml
+│   └── overlays/
+│       ├── mediated/            # Mediated topology (no extra resources)
+│       │   ├── kustomization.yaml
+│       │   └── README.md
+│       └── direct/              # Direct topology (adds route MachineConfigs)
+│           ├── kustomization.yaml
+│           ├── 99-master-s390x-hci-network-route.yaml   # generated
+│           ├── 99-worker-s390x-hci-network-route.yaml   # generated
+│           └── README.md
+├── scripts/                     # Bastion helper scripts
+└── bastion-registry/            # Registry proxy (cross-cluster model)
+</code></pre></div>
+<div class="admonition info">
+<p class="admonition-title">MachineConfigs are operator-managed</p>
+<p>The <code>hci-consumer</code> operator creates the <code>MachineConfigPool</code>, the kernel-argument
+<code>MachineConfig</code> and — for the direct topology — the two route <code>MachineConfigs</code>
+from the <code>WorkerPool</code> CR if they do not exist. The kustomize overlays are
+the equivalent manual path: apply them if you want the pool to exist before the
+operator first reconciles (Setup Guide step C.4 does exactly that).</p>
+</div>
+<div class="admonition note">
+<p class="admonition-title">Generated route MachineConfigs</p>
+<p>The two <code>99-*-s390x-hci-network-route.yaml</code> files in <code>overlays/direct/</code> are
+<strong>generated by <code>generate-setup</code></strong> from <code>provider.networking.internalSubnet</code>
+and <code>provider.gateway.ip</code>. They are only written for <code>topology: direct</code>. Do
+not edit them by hand — change <code>integration-setup.yaml</code> and re-run
+<code>generate-setup</code>.</p>
+</div>
+<h2 id="bastion-routing-and-firewall-mediated-topology-only">Bastion Routing and Firewall (Mediated Topology only)<a class="headerlink" href="#bastion-routing-and-firewall-mediated-topology-only" title="Permanent link">&para;</a></h2>
+<p><strong>Setup Guide:</strong> <a href="../../getting-started/#c2-configure-bastion-routing-and-firewall-mediated-topology-only">C.2</a></p>
+<p>In the mediated topology the main-cluster nodes reach the HCI worker subnet
+through the bastion. The bastion needs a route to the internal subnet via the
+gateway VM's external IP, and a firewall rule that admits the internal subnet:</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Route: 192.168.100.0/24 via 172.16.1.100 (gateway external IP)</span>
+sudo<span class="w"> </span>./main-cluster/scripts/01-add-route.sh
+sudo<span class="w"> </span>./main-cluster/scripts/02-firewall-setup.sh
+
+ip<span class="w"> </span>route<span class="w"> </span>show<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span><span class="m">192</span>.168.100.0/24
+<span class="c1"># 192.168.100.0/24 via 172.16.1.100</span>
+</code></pre></div>
+<p>The scripts source the generated <code>setup_env.sh</code> from the repository root
+(<code>INTERNAL_NETWORK</code>, <code>ROUTER_VM_EXTERNAL</code>).</p>
+<h2 id="machineconfigpool-and-machineconfigs">MachineConfigPool and MachineConfigs<a class="headerlink" href="#machineconfigpool-and-machineconfigs" title="Permanent link">&para;</a></h2>
+<p><strong>Setup Guide:</strong> <a href="../../getting-started/#c4-apply-machineconfigs">C.4</a></p>
+<h3 id="step-1-review-the-base-machineconfigs">Step 1: Review the Base MachineConfigs<a class="headerlink" href="#step-1-review-the-base-machineconfigs" title="Permanent link">&para;</a></h3>
+<h4 id="machineconfigpool">MachineConfigPool<a class="headerlink" href="#machineconfigpool" title="Permanent link">&para;</a></h4>
+<p><strong>File:</strong> <code>base/machineconfig-pool-hci-vm.yaml</code></p>
+<p><strong>Purpose:</strong> Create a separate pool for the HCI workers</p>
+<div class="highlight"><pre><span></span><code><span class="nt">apiVersion</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">machineconfiguration.openshift.io/v1</span>
+<span class="nt">kind</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">MachineConfigPool</span>
+<span class="nt">metadata</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">name</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">hci-vm</span>
+<span class="w">  </span><span class="nt">labels</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">machineconfiguration.openshift.io/role</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">hci-vm</span>
+<span class="nt">spec</span><span class="p">:</span>
+<span class="w">  </span><span class="nt">machineConfigSelector</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">matchExpressions</span><span class="p">:</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">key</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">machineconfiguration.openshift.io/role</span>
+<span class="w">      </span><span class="nt">operator</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">In</span>
+<span class="w">      </span><span class="nt">values</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">worker</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">hci-vm</span>
+<span class="w">    </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="nt">key</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">node-platform</span>
+<span class="w">      </span><span class="nt">operator</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">NotIn</span>
+<span class="w">      </span><span class="nt">values</span><span class="p">:</span>
+<span class="w">      </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">s390x</span>
+<span class="w">  </span><span class="nt">nodeSelector</span><span class="p">:</span>
+<span class="w">    </span><span class="nt">matchLabels</span><span class="p">:</span>
+<span class="w">      </span><span class="nt">node-role.kubernetes.io/hci-vm</span><span class="p">:</span><span class="w"> </span><span class="s">""</span>
+<span class="w">  </span><span class="nt">paused</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">false</span>
+<span class="w">  </span><span class="nt">maxUnavailable</span><span class="p">:</span><span class="w"> </span><span class="l l-Scalar l-Scalar-Plain">1</span>
+</code></pre></div>
+<p><strong>Key Features:</strong></p>
+<ul>
+<li>Separate from the main worker pool; the name is <code>consumer.machineConfigPool</code> (default <code>hci-vm</code>)</li>
+<li>Selects nodes with the <code>node-role.kubernetes.io/hci-vm: ""</code> label</li>
+<li>Excludes MachineConfigs labelled <code>node-platform: s390x</code>, so the s390x route MachineConfig never lands on x86 VMs</li>
+<li>Can be paused independently for maintenance</li>
+</ul>
+<h4 id="kernel-arguments">Kernel Arguments<a class="headerlink" href="#kernel-arguments" title="Permanent link">&para;</a></h4>
+<p><strong>File:</strong> <code>base/machineconfig-hci-vm-kargs.yaml</code> (<code>99-hci-vm-kargs</code>; also created by the operator on first reconcile if absent)</p>
+<p><strong>Purpose:</strong> Configure HCI worker-specific boot settings</p>
+<div class="highlight"><pre><span></span><code><span class="nt">kernelArguments</span><span class="p">:</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">"root=/dev/disk/by-label/root"</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">"rd.multipath=0"</span><span class="w">    </span><span class="c1"># Disable multipath — not needed for VMs</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">"rd.neednet=1"</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">"ip=enp1s0:off"</span><span class="w">     </span><span class="c1"># Disable the HCI pod-network interface (prevents OVN conflicts)</span>
+<span class="w">  </span><span class="p p-Indicator">-</span><span class="w"> </span><span class="s">"ip=enp2s0:dhcp"</span><span class="w">    </span><span class="c1"># Cluster network interface via (static-lease) DHCP</span>
+</code></pre></div>
+<p>Node role labeling is done automatically by the <code>node-labeler</code> sidecar in the
+<code>hci-consumer-operator</code> pod — no MachineConfig labeling is required.</p>
+<h3 id="step-2-choose-the-deployment-variant">Step 2: Choose the Deployment Variant<a class="headerlink" href="#step-2-choose-the-deployment-variant" title="Permanent link">&para;</a></h3>
+<p>The variant follows <code>consumer.networking.topology</code> in <code>integration-setup.yaml</code>.</p>
+<h4 id="mediated-topology-private-network">Mediated Topology (Private Network)<a class="headerlink" href="#mediated-topology-private-network" title="Permanent link">&para;</a></h4>
+<p><strong>When to use:</strong></p>
+<ul>
+<li>Main-cluster nodes sit on a private network (example: <code>10.0.0.0/24</code>)</li>
+<li>The bastion (<code>172.16.0.1</code> in the example) routes all traffic to the HCI gateway</li>
+<li>Common in z/VM and LPAR environments</li>
+</ul>
+<p><strong>What's included:</strong> the base MachineConfigPool and kernel arguments. No additional
+routing on the cluster nodes — the bastion handles it.</p>
+<p><strong>Apply:</strong>
+<div class="highlight"><pre><span></span><code>oc<span class="w"> </span>--context<span class="w"> </span><span class="si">${</span><span class="nv">MAIN_CLUSTER_CONTEXT</span><span class="si">}</span><span class="w"> </span>apply<span class="w"> </span>-k<span class="w"> </span>main-cluster/configuration/overlays/mediated/
+</code></pre></div></p>
+<h4 id="direct-topology-public-network">Direct Topology (Public Network)<a class="headerlink" href="#direct-topology-public-network" title="Permanent link">&para;</a></h4>
+<p><strong>When to use:</strong></p>
+<ul>
+<li>Main-cluster nodes are on the same routable network as the HCI gateway's external IP (<code>172.16.1.100</code> in the example)</li>
+<li>Common in KVM and bare-metal environments</li>
+</ul>
+<p><strong>What's included:</strong> the base resources plus one static-route MachineConfig for
+the master nodes and one for the s390x worker nodes, each routing the internal
+subnet (<code>192.168.100.0/24</code>) via the gateway's external IP.</p>
+<p><strong>Apply:</strong>
+<div class="highlight"><pre><span></span><code>oc<span class="w"> </span>--context<span class="w"> </span><span class="si">${</span><span class="nv">MAIN_CLUSTER_CONTEXT</span><span class="si">}</span><span class="w"> </span>apply<span class="w"> </span>-k<span class="w"> </span>main-cluster/configuration/overlays/direct/
+</code></pre></div></p>
+<p>See <a href="../../deployment-variants/">Deployment Variants</a> for a detailed comparison.</p>
+<h2 id="applying-configuration">Applying Configuration<a class="headerlink" href="#applying-configuration" title="Permanent link">&para;</a></h2>
+<h3 id="step-1-apply-base-overlay">Step 1: Apply Base + Overlay<a class="headerlink" href="#step-1-apply-base-overlay" title="Permanent link">&para;</a></h3>
+<p><strong>For Mediated Topology:</strong>
+<div class="highlight"><pre><span></span><code><span class="nb">cd</span><span class="w"> </span>/path/to/fusion-hci-integration
+
+oc<span class="w"> </span>--context<span class="w"> </span><span class="si">${</span><span class="nv">MAIN_CLUSTER_CONTEXT</span><span class="si">}</span><span class="w"> </span>apply<span class="w"> </span>-k<span class="w"> </span>main-cluster/configuration/overlays/mediated/
+
+<span class="c1"># Verify the MachineConfigPool</span>
+oc<span class="w"> </span>--context<span class="w"> </span><span class="si">${</span><span class="nv">MAIN_CLUSTER_CONTEXT</span><span class="si">}</span><span class="w"> </span>get<span class="w"> </span>mcp<span class="w"> </span>hci-vm
+
+<span class="c1"># Expected output:</span>
+<span class="c1"># NAME     CONFIG    UPDATED   UPDATING   DEGRADED   MACHINECOUNT   READYMACHINECOUNT</span>
+<span class="c1"># hci-vm   rendered  True      False      False      0              0</span>
+</code></pre></div></p>
+<p><strong>For Direct Topology:</strong>
+<div class="highlight"><pre><span></span><code>oc<span class="w"> </span>--context<span class="w"> </span><span class="si">${</span><span class="nv">MAIN_CLUSTER_CONTEXT</span><span class="si">}</span><span class="w"> </span>apply<span class="w"> </span>-k<span class="w"> </span>main-cluster/configuration/overlays/direct/
+
+oc<span class="w"> </span>--context<span class="w"> </span><span class="si">${</span><span class="nv">MAIN_CLUSTER_CONTEXT</span><span class="si">}</span><span class="w"> </span>get<span class="w"> </span>mcp<span class="w"> </span>hci-vm
+oc<span class="w"> </span>--context<span class="w"> </span><span class="si">${</span><span class="nv">MAIN_CLUSTER_CONTEXT</span><span class="si">}</span><span class="w"> </span>get<span class="w"> </span>mc<span class="w"> </span><span class="m">99</span>-master-s390x-hci-network-route
+oc<span class="w"> </span>--context<span class="w"> </span><span class="si">${</span><span class="nv">MAIN_CLUSTER_CONTEXT</span><span class="si">}</span><span class="w"> </span>get<span class="w"> </span>mc<span class="w"> </span><span class="m">99</span>-worker-s390x-hci-network-route
+
+<span class="c1"># The master and worker pools roll out the new route</span>
+oc<span class="w"> </span>--context<span class="w"> </span><span class="si">${</span><span class="nv">MAIN_CLUSTER_CONTEXT</span><span class="si">}</span><span class="w"> </span>get<span class="w"> </span>mcp<span class="w"> </span>master<span class="w"> </span>worker
+</code></pre></div></p>
+<h3 id="step-2-wait-for-machineconfig-application">Step 2: Wait for MachineConfig Application<a class="headerlink" href="#step-2-wait-for-machineconfig-application" title="Permanent link">&para;</a></h3>
+<p><strong>Mediated Topology:</strong> no node updates are required; the pool is ready immediately.</p>
+<p><strong>Direct Topology:</strong> master nodes and s390x worker nodes restart one by one. This
+can take 10–30 minutes.</p>
+<div class="highlight"><pre><span></span><code>watch<span class="w"> </span>oc<span class="w"> </span>--context<span class="w"> </span><span class="si">${</span><span class="nv">MAIN_CLUSTER_CONTEXT</span><span class="si">}</span><span class="w"> </span>get<span class="w"> </span>mcp<span class="w"> </span>master<span class="w"> </span>worker
+
+<span class="c1"># Wait for UPDATED=True, UPDATING=False, DEGRADED=False</span>
+</code></pre></div>
+<h3 id="step-3-verify-configuration">Step 3: Verify Configuration<a class="headerlink" href="#step-3-verify-configuration" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="c1"># Pool details</span>
+oc<span class="w"> </span>--context<span class="w"> </span><span class="si">${</span><span class="nv">MAIN_CLUSTER_CONTEXT</span><span class="si">}</span><span class="w"> </span>get<span class="w"> </span>mcp<span class="w"> </span>hci-vm<span class="w"> </span>-o<span class="w"> </span>yaml
+<span class="c1"># - machineConfigSelector includes "hci-vm"</span>
+<span class="c1"># - nodeSelector matches node-role.kubernetes.io/hci-vm: ""</span>
+<span class="c1"># - paused: false</span>
+
+<span class="c1"># MachineConfigs for the HCI pool</span>
+oc<span class="w"> </span>--context<span class="w"> </span><span class="si">${</span><span class="nv">MAIN_CLUSTER_CONTEXT</span><span class="si">}</span><span class="w"> </span>get<span class="w"> </span>mc<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>-E<span class="w"> </span><span class="s2">"hci"</span>
+<span class="c1"># 99-hci-vm-kargs</span>
+<span class="c1"># 99-master-s390x-hci-network-route   (direct topology only)</span>
+<span class="c1"># 99-worker-s390x-hci-network-route   (direct topology only)</span>
+</code></pre></div>
+<p><strong>Direct topology — verify the routes on a node:</strong>
+<div class="highlight"><pre><span></span><code>oc<span class="w"> </span>--context<span class="w"> </span><span class="si">${</span><span class="nv">MAIN_CLUSTER_CONTEXT</span><span class="si">}</span><span class="w"> </span>debug<span class="w"> </span>node/&lt;master-node&gt;
+chroot<span class="w"> </span>/host
+ip<span class="w"> </span>route<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span><span class="m">192</span>.168.100
+<span class="c1"># 192.168.100.0/24 via 172.16.1.100 dev br-ex</span>
+
+<span class="c1"># Same check on an s390x worker (no "dev br-ex")</span>
+<span class="c1"># 192.168.100.0/24 via 172.16.1.100</span>
+</code></pre></div></p>
+<h2 id="hci-node-manager">HCI Node Manager<a class="headerlink" href="#hci-node-manager" title="Permanent link">&para;</a></h2>
+<p><strong>Setup Guide:</strong> <a href="../../getting-started/#c8-build-and-deploy-the-operators">C.8</a> (deployed with the operator)</p>
+<h3 id="purpose">Purpose<a class="headerlink" href="#purpose" title="Permanent link">&para;</a></h3>
+<p>Automates the HCI worker node lifecycle:</p>
+<ul>
+<li><strong>CSR approval</strong> — approves the bootstrap and serving CSRs of the worker VMs</li>
+<li><strong>Node labeling</strong> — applies <code>node-role.kubernetes.io/hci-vm: ""</code></li>
+</ul>
+<h3 id="deployment">Deployment<a class="headerlink" href="#deployment" title="Permanent link">&para;</a></h3>
+<p>The node manager runs as two sidecar containers (<code>csr-approver</code> and <code>node-labeler</code>)
+inside the <code>hci-consumer-operator</code> Deployment. It is deployed automatically as part of
+the operator — no separate build or deployment step is required.</p>
+<p>The sidecars are configured via the <code>hci-node-manager-config</code> ConfigMap, which the
+operator writes on every reconcile from the <code>WorkerPool</code> CR:</p>
+<table>
+<thead>
+<tr>
+<th>ConfigMap key</th>
+<th>Source</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>NODE_NAME_PATTERN</code></td>
+<td><code>spec.consumer.workers.namePrefix</code> (example: <code>worker-x86</code>)</td>
+</tr>
+<tr>
+<td><code>TARGET_NETWORK</code></td>
+<td><code>spec.provider.networking.internalSubnet</code> (example: <code>192.168.100.0/24</code>)</td>
+</tr>
+</tbody>
+</table>
+<p>The cluster domain is derived automatically from <code>config.openshift.io/v1 DNS/cluster</code>
+— no manual configuration is needed.</p>
+<p>Both sidecars re-read the ConfigMap every ~30 s, so a pod that started before the
+first reconcile picks up the config by itself. The <code>node-labeler</code> labels a node only
+if its name matches <code>&lt;NODE_NAME_PATTERN&gt;-&lt;N&gt;</code>, its <code>kubernetes.io/arch</code> is <code>amd64</code>,
+<strong>and</strong> its InternalIP is in <code>TARGET_NETWORK</code>. This keeps s390x control-plane and
+compute nodes out of the <code>hci-vm</code> MachineConfigPool even if the networks overlap.</p>
+<h3 id="verification">Verification<a class="headerlink" href="#verification" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="c1"># The consumer operator pod (the sidecars are containers within it)</span>
+oc<span class="w"> </span>--context<span class="w"> </span><span class="si">${</span><span class="nv">MAIN_CLUSTER_CONTEXT</span><span class="si">}</span><span class="w"> </span>get<span class="w"> </span>pods<span class="w"> </span>-n<span class="w"> </span>hci-node-manager<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-l<span class="w"> </span>app.kubernetes.io/name<span class="o">=</span>hci-consumer-operator
+
+<span class="c1"># csr-approver logs</span>
+oc<span class="w"> </span>--context<span class="w"> </span><span class="si">${</span><span class="nv">MAIN_CLUSTER_CONTEXT</span><span class="si">}</span><span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </span>hci-node-manager<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>deploy/hci-consumer-operator<span class="w"> </span>-c<span class="w"> </span>csr-approver<span class="w"> </span><span class="p">|</span><span class="w"> </span>tail<span class="w"> </span>-20
+
+<span class="c1"># node-labeler logs</span>
+oc<span class="w"> </span>--context<span class="w"> </span><span class="si">${</span><span class="nv">MAIN_CLUSTER_CONTEXT</span><span class="si">}</span><span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </span>hci-node-manager<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>deploy/hci-consumer-operator<span class="w"> </span>-c<span class="w"> </span>node-labeler<span class="w"> </span><span class="p">|</span><span class="w"> </span>tail<span class="w"> </span>-20
+</code></pre></div>
+<h2 id="registry-configuration-cross-cluster-model-only">Registry Configuration (Cross-Cluster Model only)<a class="headerlink" href="#registry-configuration-cross-cluster-model-only" title="Permanent link">&para;</a></h2>
+<p><strong>Setup Guide:</strong> <a href="../../getting-started/#c5-configure-bastion-registry-proxy">C.5</a> and <a href="../../getting-started/#c6-create-the-registry-access-secret">C.6</a></p>
+<h3 id="when-needed">When Needed<a class="headerlink" href="#when-needed" title="Permanent link">&para;</a></h3>
+<p>Only when <code>registry.model: cross-cluster</code> is set in <code>integration-setup.yaml</code>. With
+<code>local-s2i</code> or <code>external</code>, skip this section.</p>
+<h3 id="setup">Setup<a class="headerlink" href="#setup" title="Permanent link">&para;</a></h3>
+<p><strong>Location:</strong> <code>main-cluster/bastion-registry/</code></p>
+<ol>
+<li>
+<p><strong>Bastion HAProxy and cluster insecure-registry entry</strong> — run as your normal user,
+   <strong>not</strong> with <code>sudo</code> (the script uses <code>sudo</code> internally for HAProxy, firewall and
+   certificates, and runs <code>oc</code> with your own login against <code>${MAIN_CLUSTER_CONTEXT}</code>):</p>
+<div class="highlight"><pre><span></span><code>./main-cluster/bastion-registry/setup-registry-proxy.sh
+</code></pre></div>
+<p>The script generates a self-signed certificate, configures HAProxy to forward
+<code>bastion.cluster.example.com:5443</code> to the HCI registry, and adds that address to
+<code>image.config.openshift.io/cluster</code> <code>spec.registrySources.insecureRegistries</code>
+on the main cluster. That change triggers a MachineConfigPool rollout (10–30
+minutes).</p>
+</li>
+<li>
+<p><strong>Registry push secret</strong> — reads the token of the <code>registry-pusher</code> ServiceAccount
+   from the HCI cluster (created by <code>setup-consumer-rbac.sh</code>, see
+   <a href="../hci-cluster/#step-3-rbac-for-the-operators">HCI Cluster Configuration</a>) and
+   stores it as a docker-registry Secret on the main cluster:</p>
+<div class="highlight"><pre><span></span><code>./main-cluster/bastion-registry/setup-registry-access.sh
+<span class="c1"># creates Secret hci-registry-push in namespace hci-node-manager</span>
+</code></pre></div>
+</li>
+</ol>
+<p>Verify:</p>
+<div class="highlight"><pre><span></span><code>oc<span class="w"> </span>--context<span class="w"> </span><span class="si">${</span><span class="nv">MAIN_CLUSTER_CONTEXT</span><span class="si">}</span><span class="w"> </span>get<span class="w"> </span>image.config.openshift.io<span class="w"> </span>cluster<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{.spec.registrySources.insecureRegistries}'</span>
+curl<span class="w"> </span>-sk<span class="w"> </span>https://localhost:5443/v2/<span class="w"> </span><span class="o">&amp;&amp;</span><span class="w"> </span><span class="nb">echo</span><span class="w"> </span>ok<span class="w">     </span><span class="c1"># on the bastion</span>
+oc<span class="w"> </span>--context<span class="w"> </span><span class="si">${</span><span class="nv">MAIN_CLUSTER_CONTEXT</span><span class="si">}</span><span class="w"> </span>get<span class="w"> </span>secret<span class="w"> </span>hci-registry-push<span class="w"> </span>-n<span class="w"> </span>hci-node-manager
+</code></pre></div>
+<p>See the <a href="https://github.com/IBM/fusion-hci-integration/tree/main/main-cluster/bastion-registry/README.md">Bastion Registry README</a> for details.</p>
+<h2 id="helper-scripts">Helper Scripts<a class="headerlink" href="#helper-scripts" title="Permanent link">&para;</a></h2>
+<p>The scripts in <code>main-cluster/scripts/</code> run on the bastion and source the generated <code>setup_env.sh</code>:</p>
+<table>
+<thead>
+<tr>
+<th>Script</th>
+<th>Purpose</th>
+<th>Setup Guide</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>01-add-route.sh</code></td>
+<td>Route to the internal subnet via the gateway external IP (mediated)</td>
+<td>C.2</td>
+</tr>
+<tr>
+<td><code>02-firewall-setup.sh</code></td>
+<td>Verify/complete the bastion firewall configuration (mediated)</td>
+<td>C.2</td>
+</tr>
+</tbody>
+</table>
+<p>The worker ignition file (<code>worker-hci.ign</code>) is produced by the <code>hci-provisioner</code>
+operator; no script is needed for it.</p>
+<h2 id="post-configuration-tasks">Post-Configuration Tasks<a class="headerlink" href="#post-configuration-tasks" title="Permanent link">&para;</a></h2>
+<h3 id="step-1-verify-the-machineconfigpool">Step 1: Verify the MachineConfigPool<a class="headerlink" href="#step-1-verify-the-machineconfigpool" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code>oc<span class="w"> </span>--context<span class="w"> </span><span class="si">${</span><span class="nv">MAIN_CLUSTER_CONTEXT</span><span class="si">}</span><span class="w"> </span>get<span class="w"> </span>mcp<span class="w"> </span>hci-vm
+
+<span class="c1"># MACHINECOUNT: 0 (no workers yet)</span>
+<span class="c1"># READYMACHINECOUNT: 0</span>
+<span class="c1"># UPDATED: True   UPDATING: False   DEGRADED: False</span>
+</code></pre></div>
+<h3 id="step-2-prepare-for-worker-join">Step 2: Prepare for Worker Join<a class="headerlink" href="#step-2-prepare-for-worker-join" title="Permanent link">&para;</a></h3>
+<p>CSRs are approved automatically by the <code>csr-approver</code> sidecar in the
+<code>hci-consumer-operator</code> pod. No manual action is needed once the operator is deployed.</p>
+<div class="highlight"><pre><span></span><code><span class="c1"># Monitor csr-approver activity</span>
+oc<span class="w"> </span>--context<span class="w"> </span><span class="si">${</span><span class="nv">MAIN_CLUSTER_CONTEXT</span><span class="si">}</span><span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </span>hci-node-manager<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>deploy/hci-consumer-operator<span class="w"> </span>-c<span class="w"> </span>csr-approver<span class="w"> </span>-f
+
+<span class="c1"># Manual approval (e.g. operator not yet deployed)</span>
+oc<span class="w"> </span>--context<span class="w"> </span><span class="si">${</span><span class="nv">MAIN_CLUSTER_CONTEXT</span><span class="si">}</span><span class="w"> </span>get<span class="w"> </span>csr<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>Pending
+oc<span class="w"> </span>--context<span class="w"> </span><span class="si">${</span><span class="nv">MAIN_CLUSTER_CONTEXT</span><span class="si">}</span><span class="w"> </span>get<span class="w"> </span>csr<span class="w"> </span><span class="p">|</span><span class="w"> </span>awk<span class="w"> </span><span class="s1">'/Pending/ {print $1}'</span><span class="w"> </span><span class="se">\</span>
+<span class="w">  </span><span class="p">|</span><span class="w"> </span>xargs<span class="w"> </span>-r<span class="w"> </span>oc<span class="w"> </span>--context<span class="w"> </span><span class="si">${</span><span class="nv">MAIN_CLUSTER_CONTEXT</span><span class="si">}</span><span class="w"> </span>adm<span class="w"> </span>certificate<span class="w"> </span>approve
+</code></pre></div>
+<h3 id="step-3-monitor-worker-join">Step 3: Monitor Worker Join<a class="headerlink" href="#step-3-monitor-worker-join" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code>watch<span class="w"> </span>oc<span class="w"> </span>--context<span class="w"> </span><span class="si">${</span><span class="nv">MAIN_CLUSTER_CONTEXT</span><span class="si">}</span><span class="w"> </span>get<span class="w"> </span>nodes<span class="w"> </span>-l<span class="w"> </span>node-role.kubernetes.io/hci-vm
+watch<span class="w"> </span>oc<span class="w"> </span>--context<span class="w"> </span><span class="si">${</span><span class="nv">MAIN_CLUSTER_CONTEXT</span><span class="si">}</span><span class="w"> </span>get<span class="w"> </span>mcp<span class="w"> </span>hci-vm
+
+<span class="c1"># As workers join, MACHINECOUNT and READYMACHINECOUNT increase</span>
+</code></pre></div>
+<h2 id="updating-configuration">Updating Configuration<a class="headerlink" href="#updating-configuration" title="Permanent link">&para;</a></h2>
+<h3 id="updating-machineconfigs">Updating MachineConfigs<a class="headerlink" href="#updating-machineconfigs" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="c1"># Edit the MachineConfig</span>
+vi<span class="w"> </span>main-cluster/configuration/base/machineconfig-hci-vm-kargs.yaml
+
+<span class="c1"># Apply the change</span>
+oc<span class="w"> </span>--context<span class="w"> </span><span class="si">${</span><span class="nv">MAIN_CLUSTER_CONTEXT</span><span class="si">}</span><span class="w"> </span>apply<span class="w"> </span>-k<span class="w"> </span>main-cluster/configuration/overlays/&lt;variant&gt;/
+
+<span class="c1"># Workers restart to apply it</span>
+watch<span class="w"> </span>oc<span class="w"> </span>--context<span class="w"> </span><span class="si">${</span><span class="nv">MAIN_CLUSTER_CONTEXT</span><span class="si">}</span><span class="w"> </span>get<span class="w"> </span>mcp<span class="w"> </span>hci-vm
+</code></pre></div>
+<p>The <code>hci-consumer</code> operator only creates the MachineConfigs when they are absent; it
+never overwrites an existing one, so manual changes are preserved.</p>
+<p><strong>Pausing updates:</strong>
+<div class="highlight"><pre><span></span><code>oc<span class="w"> </span>--context<span class="w"> </span><span class="si">${</span><span class="nv">MAIN_CLUSTER_CONTEXT</span><span class="si">}</span><span class="w"> </span>patch<span class="w"> </span>mcp<span class="w"> </span>hci-vm<span class="w"> </span>--type<span class="o">=</span>merge<span class="w"> </span>-p<span class="w"> </span><span class="s1">'{"spec":{"paused":true}}'</span>
+<span class="c1"># Make changes ...</span>
+oc<span class="w"> </span>--context<span class="w"> </span><span class="si">${</span><span class="nv">MAIN_CLUSTER_CONTEXT</span><span class="si">}</span><span class="w"> </span>patch<span class="w"> </span>mcp<span class="w"> </span>hci-vm<span class="w"> </span>--type<span class="o">=</span>merge<span class="w"> </span>-p<span class="w"> </span><span class="s1">'{"spec":{"paused":false}}'</span>
+</code></pre></div></p>
+<h3 id="switching-variants">Switching Variants<a class="headerlink" href="#switching-variants" title="Permanent link">&para;</a></h3>
+<p><strong>Not recommended:</strong> switching the topology after deployment requires redeploying the workers.</p>
+<p><strong>If necessary:</strong>
+<div class="highlight"><pre><span></span><code><span class="c1"># 1. Scale the pool to 0 workers (edit spec.consumer.workers.count) and wait</span>
+oc<span class="w"> </span>--context<span class="w"> </span><span class="si">${</span><span class="nv">MAIN_CLUSTER_CONTEXT</span><span class="si">}</span><span class="w"> </span>-n<span class="w"> </span>hci-node-manager<span class="w"> </span>edit<span class="w"> </span>workerpool<span class="w"> </span>hci-workers
+
+<span class="c1"># 2. Delete the old route MachineConfigs (and the pool, if it is to be recreated)</span>
+oc<span class="w"> </span>--context<span class="w"> </span><span class="si">${</span><span class="nv">MAIN_CLUSTER_CONTEXT</span><span class="si">}</span><span class="w"> </span>delete<span class="w"> </span>mc<span class="w"> </span><span class="m">99</span>-master-s390x-hci-network-route<span class="w"> </span><span class="m">99</span>-worker-s390x-hci-network-route<span class="w"> </span>--ignore-not-found
+
+<span class="c1"># 3. Change consumer.networking.topology in integration-setup.yaml,</span>
+<span class="c1">#    re-run generate-setup, then apply the matching overlay</span>
+oc<span class="w"> </span>--context<span class="w"> </span><span class="si">${</span><span class="nv">MAIN_CLUSTER_CONTEXT</span><span class="si">}</span><span class="w"> </span>apply<span class="w"> </span>-k<span class="w"> </span>main-cluster/configuration/overlays/&lt;new-variant&gt;/
+
+<span class="c1"># 4. Scale the pool back up</span>
+</code></pre></div></p>
+<h2 id="troubleshooting">Troubleshooting<a class="headerlink" href="#troubleshooting" title="Permanent link">&para;</a></h2>
+<h3 id="machineconfigpool-stuck-updating">MachineConfigPool Stuck Updating<a class="headerlink" href="#machineconfigpool-stuck-updating" title="Permanent link">&para;</a></h3>
+<p><strong>Symptoms:</strong> <code>UPDATING: True</code> for an extended period, or <code>DEGRADED: True</code>.</p>
+<div class="highlight"><pre><span></span><code>oc<span class="w"> </span>--context<span class="w"> </span><span class="si">${</span><span class="nv">MAIN_CLUSTER_CONTEXT</span><span class="si">}</span><span class="w"> </span>get<span class="w"> </span>mcp<span class="w"> </span>hci-vm<span class="w"> </span>-o<span class="w"> </span>yaml
+oc<span class="w"> </span>--context<span class="w"> </span><span class="si">${</span><span class="nv">MAIN_CLUSTER_CONTEXT</span><span class="si">}</span><span class="w"> </span>get<span class="w"> </span>mcp<span class="w"> </span>hci-vm<span class="w"> </span>-o<span class="w"> </span><span class="nv">jsonpath</span><span class="o">=</span><span class="s1">'{.status.conditions[*].message}'</span>
+
+<span class="c1"># machine-config-daemon logs on affected nodes</span>
+oc<span class="w"> </span>--context<span class="w"> </span><span class="si">${</span><span class="nv">MAIN_CLUSTER_CONTEXT</span><span class="si">}</span><span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </span>openshift-machine-config-operator<span class="w"> </span>-l<span class="w"> </span>k8s-app<span class="o">=</span>machine-config-daemon
+</code></pre></div>
+<h3 id="workers-not-joining-the-pool">Workers Not Joining the Pool<a class="headerlink" href="#workers-not-joining-the-pool" title="Permanent link">&para;</a></h3>
+<p><strong>Symptoms:</strong> workers appear in the cluster but not in the <code>hci-vm</code> pool.</p>
+<div class="highlight"><pre><span></span><code>oc<span class="w"> </span>--context<span class="w"> </span><span class="si">${</span><span class="nv">MAIN_CLUSTER_CONTEXT</span><span class="si">}</span><span class="w"> </span>get<span class="w"> </span>node<span class="w"> </span>worker-x86-1<span class="w"> </span>--show-labels
+<span class="c1"># Should have: node-role.kubernetes.io/hci-vm</span>
+
+<span class="c1"># The node-labeler requires: name matches worker-x86-&lt;N&gt;, arch amd64,</span>
+<span class="c1"># InternalIP in 192.168.100.0/24.  Check its log first:</span>
+oc<span class="w"> </span>--context<span class="w"> </span><span class="si">${</span><span class="nv">MAIN_CLUSTER_CONTEXT</span><span class="si">}</span><span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </span>hci-node-manager<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>deploy/hci-consumer-operator<span class="w"> </span>-c<span class="w"> </span>node-labeler<span class="w"> </span><span class="p">|</span><span class="w"> </span>tail<span class="w"> </span>-30
+
+<span class="c1"># If you must label manually:</span>
+oc<span class="w"> </span>--context<span class="w"> </span><span class="si">${</span><span class="nv">MAIN_CLUSTER_CONTEXT</span><span class="si">}</span><span class="w"> </span>label<span class="w"> </span>node<span class="w"> </span>worker-x86-1<span class="w"> </span>node-role.kubernetes.io/hci-vm<span class="o">=</span>
+</code></pre></div>
+<h3 id="csrs-not-being-approved">CSRs Not Being Approved<a class="headerlink" href="#csrs-not-being-approved" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code>oc<span class="w"> </span>--context<span class="w"> </span><span class="si">${</span><span class="nv">MAIN_CLUSTER_CONTEXT</span><span class="si">}</span><span class="w"> </span>get<span class="w"> </span>csr<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span>Pending
+
+oc<span class="w"> </span>--context<span class="w"> </span><span class="si">${</span><span class="nv">MAIN_CLUSTER_CONTEXT</span><span class="si">}</span><span class="w"> </span>logs<span class="w"> </span>-n<span class="w"> </span>hci-node-manager<span class="w"> </span><span class="se">\</span>
+<span class="w">  </span>deploy/hci-consumer-operator<span class="w"> </span>-c<span class="w"> </span>csr-approver<span class="w"> </span><span class="p">|</span><span class="w"> </span>tail<span class="w"> </span>-30
+</code></pre></div>
+<h3 id="routes-not-applied-direct-topology">Routes Not Applied (Direct Topology)<a class="headerlink" href="#routes-not-applied-direct-topology" title="Permanent link">&para;</a></h3>
+<div class="highlight"><pre><span></span><code><span class="c1"># MachineConfigs exist</span>
+oc<span class="w"> </span>--context<span class="w"> </span><span class="si">${</span><span class="nv">MAIN_CLUSTER_CONTEXT</span><span class="si">}</span><span class="w"> </span>get<span class="w"> </span>mc<span class="w"> </span><span class="m">99</span>-master-s390x-hci-network-route<span class="w"> </span><span class="m">99</span>-worker-s390x-hci-network-route
+
+<span class="c1"># Applied to the pools</span>
+oc<span class="w"> </span>--context<span class="w"> </span><span class="si">${</span><span class="nv">MAIN_CLUSTER_CONTEXT</span><span class="si">}</span><span class="w"> </span>get<span class="w"> </span>mcp<span class="w"> </span>master<span class="w"> </span>-o<span class="w"> </span>yaml<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span><span class="m">99</span>-master-s390x-hci-network-route
+oc<span class="w"> </span>--context<span class="w"> </span><span class="si">${</span><span class="nv">MAIN_CLUSTER_CONTEXT</span><span class="si">}</span><span class="w"> </span>get<span class="w"> </span>mcp<span class="w"> </span>worker<span class="w"> </span>-o<span class="w"> </span>yaml<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span><span class="m">99</span>-worker-s390x-hci-network-route
+
+<span class="c1"># Route on a node</span>
+oc<span class="w"> </span>--context<span class="w"> </span><span class="si">${</span><span class="nv">MAIN_CLUSTER_CONTEXT</span><span class="si">}</span><span class="w"> </span>debug<span class="w"> </span>node/&lt;node&gt;
+chroot<span class="w"> </span>/host
+ip<span class="w"> </span>route<span class="w"> </span><span class="p">|</span><span class="w"> </span>grep<span class="w"> </span><span class="m">192</span>.168.100
+</code></pre></div>
+<p>See the <a href="../../operations/troubleshooting/">Troubleshooting Guide</a> for detailed solutions.</p>
+<h2 id="best-practices">Best Practices<a class="headerlink" href="#best-practices" title="Permanent link">&para;</a></h2>
+<h3 id="configuration-management">Configuration Management<a class="headerlink" href="#configuration-management" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>Keep <code>integration-setup.yaml</code> as the single source of truth</strong> — regenerate rather than hand-edit generated files</li>
+<li><strong>Version control</strong> — keep <code>integration-setup.yaml</code> and any customized MachineConfigs in Git (never the generated <code>setup_env.sh</code>/credentials)</li>
+<li><strong>Test changes</strong> — verify in a dev environment before production</li>
+<li><strong>Document customizations</strong> — maintain a changelog</li>
+</ol>
+<h3 id="machineconfigpool-management">MachineConfigPool Management<a class="headerlink" href="#machineconfigpool-management" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>Separate pools</strong> — keep HCI workers isolated</li>
+<li><strong>Pause for maintenance</strong> — prevent automatic updates during changes</li>
+<li><strong>Monitor status</strong> — watch for degraded state</li>
+<li><strong>Plan updates</strong> — schedule during maintenance windows</li>
+</ol>
+<h3 id="security">Security<a class="headerlink" href="#security" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>Limit access</strong> — use RBAC for MachineConfig management</li>
+<li><strong>Audit changes</strong> — review MachineConfig modifications</li>
+<li><strong>Protect credentials</strong> — secure ignition files, SSH keys and operator credential Secrets</li>
+<li><strong>Regular updates</strong> — keep RHCOS updated</li>
+</ol>
+<h3 id="operations">Operations<a class="headerlink" href="#operations" title="Permanent link">&para;</a></h3>
+<ol>
+<li><strong>CSR approval is automatic</strong> — handled by the <code>csr-approver</code> sidecar in the consumer operator</li>
+<li><strong>Monitor continuously</strong> — set up alerts for pool status</li>
+<li><strong>Test recovery</strong> — verify disaster recovery procedures</li>
+<li><strong>Document procedures</strong> — maintain runbooks</li>
+</ol>
+<h2 id="references">References<a class="headerlink" href="#references" title="Permanent link">&para;</a></h2>
+<ul>
+<li><a href="../../getting-started/#tier-c-connect-a-main-cluster">Setup Guide – Tier C</a></li>
+<li><a href="../../architecture/architecture-overview/">Architecture Overview</a></li>
+<li><a href="../../deployment-variants/">Deployment Variants</a></li>
+<li><a href="../hci-cluster/">HCI Cluster Configuration</a></li>
+<li><a href="../../operations/troubleshooting/">Troubleshooting Guide</a></li>
+<li><a href="../kustomize-overlays/">Kustomize Overlays</a></li>
+</ul>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+        
+<div class="md-social">
+  
+    
+    
+    
+    
+      
+      
+    
+    <a href="https://github.com/IBM/fusion-hci-integration" target="_blank" rel="noopener" title="github.com" class="md-social__link">
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M173.9 397.4c0 2-2.3 3.6-5.2 3.6-3.3.3-5.6-1.3-5.6-3.6 0-2 2.3-3.6 5.2-3.6 3-.3 5.6 1.3 5.6 3.6m-31.1-4.5c-.7 2 1.3 4.3 4.3 4.9 2.6 1 5.6 0 6.2-2s-1.3-4.3-4.3-5.2c-2.6-.7-5.5.3-6.2 2.3m44.2-1.7c-2.9.7-4.9 2.6-4.6 4.9.3 2 2.9 3.3 5.9 2.6 2.9-.7 4.9-2.6 4.6-4.6-.3-1.9-3-3.2-5.9-2.9M252.8 8C114.1 8 8 113.3 8 252c0 110.9 69.8 205.8 169.5 239.2 12.8 2.3 17.3-5.6 17.3-12.1 0-6.2-.3-40.4-.3-61.4 0 0-70 15-84.7-29.8 0 0-11.4-29.1-27.8-36.6 0 0-22.9-15.7 1.6-15.4 0 0 24.9 2 38.6 25.8 21.9 38.6 58.6 27.5 72.9 20.9 2.3-16 8.8-27.1 16-33.7-55.9-6.2-112.3-14.3-112.3-110.5 0-27.5 7.6-41.3 23.6-58.9-2.6-6.5-11.1-33.3 2.6-67.9 20.9-6.5 69 27 69 27 20-5.6 41.5-8.5 62.8-8.5s42.8 2.9 62.8 8.5c0 0 48.1-33.6 69-27 13.7 34.7 5.2 61.4 2.6 67.9 16 17.7 25.8 31.5 25.8 58.9 0 96.5-58.9 104.2-114.8 110.5 9.2 7.9 17 22.9 17 46.4 0 33.7-.3 75.4-.3 83.6 0 6.5 4.6 14.4 17.3 12.1C436.2 457.8 504 362.9 504 252 504 113.3 391.5 8 252.8 8M105.2 352.9c-1.3 1-1 3.3.7 5.2 1.6 1.6 3.9 2.3 5.2 1 1.3-1 1-3.3-.7-5.2-1.6-1.6-3.9-2.3-5.2-1m-10.8-8.1c-.7 1.3.3 2.9 2.3 3.9 1.6 1 3.6.7 4.3-.7.7-1.3-.3-2.9-2.3-3.9-2-.6-3.6-.3-4.3.7m32.4 35.6c-1.6 1.3-1 4.3 1.3 6.2 2.3 2.3 5.2 2.6 6.5 1 1.3-1.3.7-4.3-1.3-6.2-2.2-2.3-5.2-2.6-6.5-1m-11.4-14.7c-1.6 1-1.6 3.6 0 5.9s4.3 3.3 5.6 2.3c1.6-1.3 1.6-3.9 0-6.2-1.4-2.3-4-3.3-5.6-2"/></svg>
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["navigation.tabs", "navigation.sections", "navigation.expand", "search.suggest", "search.highlight", "content.code.copy"], "search": "../../assets/javascripts/workers/search.a7633da7.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": {"default": "0.2.0"}}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.c21346df.min.js"></script>
+      
+    
+  </body>
+</html>
