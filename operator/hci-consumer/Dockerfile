@@ -10,6 +10,13 @@
 
 FROM registry.redhat.io/openshift4/ose-ansible-operator:v4.17
 
+# ── System dependencies ───────────────────────────────────────────────────────
+# openssh-clients provides /usr/bin/ssh, required by BS-06b to write
+# desired-version.txt to the gateway VM after a cluster version upgrade.
+USER root
+RUN dnf install -y openssh-clients && dnf clean all
+USER 1001
+
 # ── Operator roles and watches ────────────────────────────────────────────────
 COPY watches.yaml ${HOME}/watches.yaml
 COPY roles/       ${HOME}/roles/
