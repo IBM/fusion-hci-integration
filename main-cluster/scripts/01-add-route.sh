@@ -124,8 +124,11 @@ else
         DEFAULT_CONN=$(nmcli -t -f NAME,DEVICE connection show --active | grep -v '^lo:' | head -1 | cut -d: -f1)
         
         if [ -n "$DEFAULT_CONN" ]; then
+            # Only store the route in the profile. Do NOT run 'nmcli connection up':
+            # the route is already live (ip route add above), and re-activating the
+            # connection makes NetworkManager rewrite /etc/resolv.conf, which breaks
+            # name resolution if DNS is not fully defined in the connection profile.
             nmcli connection modify "$DEFAULT_CONN" +ipv4.routes "${INTERNAL_NETWORK} ${ROUTER_VM_IP}"
-            nmcli connection up "$DEFAULT_CONN"
             echo -e "${GREEN}✓ Route persisted via NetworkManager (connection: $DEFAULT_CONN)${NC}"
         else
             echo -e "${YELLOW}⚠ Could not determine active connection${NC}"
