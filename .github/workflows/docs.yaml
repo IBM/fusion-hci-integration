@@ -10,10 +10,15 @@ on:
       - 'mkdocs.yml'
       - 'docs/**'
 
+permissions:
+  contents: read
+
 jobs:
   build:
     name: Deploy docs
     runs-on: ubuntu-latest
+    permissions:
+      contents: write  # mkdocs gh-deploy pushes to the gh-pages branch
     steps:
       - name: Checkout main
         uses: actions/checkout@v4
